@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import cached_property
+
+from agentscope.agent import Agent, ModelConfig, ReActConfig
+from agentscope.model import ChatModelBase
+from agentscope.tool import Toolkit
+
+from erpnext_agent.agents.model_factory import build_chat_model
+from erpnext_agent.agents.prompts import (
+    ACTION_SYSTEM_PROMPT,
+    DATA_SYSTEM_PROMPT,
+    ORCHESTRATOR_SYSTEM_PROMPT,
+    PATROL_SYSTEM_PROMPT,
+)
+from erpnext_agent.config import Settings
+
+
+@dataclass(frozen=True, slots=True)
+class AgentBundle:
+    orchestrator: Agent
+    data_agent: Agent
+    action_agent: Agent
+    patrol_agent: Agent
+
+
+class ConfiguredAgentFactory:
+    """Create user-scoped Agent bundles from application Settings.
+
+    The provider model is configuration-scoped, while every call to `build`
+    creates fresh Agent instances and therefore fresh conversation state. The
+    supplied Toolkits must already be filtered and bound to the current user's
+    MCP access token.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    @cached_property
+    def model(self) -> ChatModelBase:
+        return build_chat_model(self._settings)
+
+    def build(
+        self,
+        *,
+        orchestrator_toolkit: Toolkit,
+        data_toolkit: Toolkit,
+        action_toolkit: Toolkit,
+        patrol_toolkit: Toolkit,
+    ) -> AgentBundle:
+        return build_agent_bundle(
+            model=self.model,
+            orchestrator_toolkit=orchestrator_toolkit,
+            data_toolkit=data_toolkit,
+            action_toolkit=action_toolkit,
+            patrol_toolkit=patrol_toolkit,
+            max_retries=self._settings.model_max_retries,
+        )
+
+
+def build_agent_bundle(
+    *,
+    model: ChatModelBase,
+    orchestrator_toolkit: Toolkit,
+    data_toolkit: Toolkit,
+    action_toolkit: Toolkit,
+    patrol_toolkit: Toolkit,
+    max_retries: int = 1,
+) -> AgentBundle:
+    """Construct AgentScope 2.0.5 agents from already policy-filtered toolkits.
+
+    Model-provider construction and the custom ToolBase bridge are deliberately separate;
+    neither tokens nor MCP clients belong in serializable agent state.
+    """
+
+    def make(name: str, prompt: str, toolkit: Toolkit) -> Agent:
+        return Agent(
+            name=name,
+            system_prompt=prompt,
+            model=model,
+            toolkit=toolkit,
+            model_config=ModelConfig(max_retries=max_retries),
+            react_config=ReActConfig(max_iters=8, stop_on_reject=True),
+        )
+
+    return AgentBundle(
+        orchestrator=make("orchestrator", ORCHESTRATOR_SYSTEM_PROMPT, orchestrator_toolkit),
+        data_agent=make("data_agent", DATA_SYSTEM_PROMPT, data_toolkit),
+        action_agent=make("action_agent", ACTION_SYSTEM_PROMPT, action_toolkit),
+        patrol_agent=make("patrol_agent", PATROL_SYSTEM_PROMPT, patrol_toolkit),
+    )

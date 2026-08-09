@@ -1,0 +1,11 @@
+metrics:
+  - metric: 未结应收
+    aliases: [应收余额, 待回款]
+    executor:
+      tool: erpnext_get_receivables_summary
+    dimensions: [company, customer, currency]
+    rules:
+      - 仅 docstatus=1
+      - outstanding_amount != 0
+      - 不同币种不得相加
+
