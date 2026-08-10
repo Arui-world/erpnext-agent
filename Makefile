@@ -1,4 +1,4 @@
-.PHONY: install check test run compose-config up down
+.PHONY: install check test run compose-config up rebuild restart logs ps down
 
 install:
 	uv sync --frozen
@@ -17,8 +17,19 @@ compose-config:
 	docker compose --env-file .env config --quiet
 
 up:
+	docker compose up -d
+
+rebuild:
 	docker compose up --build -d
+
+restart:
+	docker compose restart agent
+
+logs:
+	docker compose logs -f agent
+
+ps:
+	docker compose ps
 
 down:
 	docker compose down
-

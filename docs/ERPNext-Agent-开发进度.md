@@ -1,6 +1,6 @@
 # ERPNext Agent 开发进度
 
-> 最后更新：2026-08-09  
+> 最后更新：2026-08-10
 > 当前阶段：PostgreSQL 消息持久化、多会话历史前端与真实模型记忆完成
 > 进度记录原则：每次开发任务完成后更新本文，记录实际完成内容、验证证据、遗留项和下一步。
 
@@ -100,6 +100,8 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 - 编写 PostgreSQL、Redis、Agent 三服务 Compose；
 - 为数据库、Redis 和 Agent 配置健康检查与持久化数据卷。
 - Compose 和镜像健康检查同时验证 API readiness 与根路径聊天页面。
+- 优化 Makefile 启动入口：`make up` 不再强制构建，`make rebuild` 专用于代码/依赖变化；
+- 新增 `make restart`、`make logs` 和 `make ps` 日常运维命令。
 
 ### 2.7 消息持久化与模型记忆
 

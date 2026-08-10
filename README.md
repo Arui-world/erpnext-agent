@@ -59,7 +59,19 @@ ERPNext 中的 OAuth Client 至少应配置：
 uv sync --frozen
 uv run pytest
 docker compose --env-file .env config --quiet
-docker compose up --build -d
+make rebuild
+```
+
+首次启动、修改 Python 代码、依赖或 Dockerfile 后使用 `make rebuild`；没有代码变化时使用
+`make up`，它只启动/协调现有容器，不再强制执行镜像构建。常用运维命令：
+
+```bash
+make up       # 日常启动，不强制构建
+make rebuild  # 构建镜像并启动全部服务
+make restart  # 只重启 Agent 容器
+make logs     # 持续查看 Agent 日志
+make ps       # 查看 Compose 服务状态
+make down     # 停止并删除 Compose 容器
 ```
 
 验证：
