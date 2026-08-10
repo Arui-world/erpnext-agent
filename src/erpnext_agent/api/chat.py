@@ -50,6 +50,10 @@ from erpnext_agent.mcp.adapter import MCPError
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+EMPTY_REPLY_FALLBACK = (
+    "本次查询未能生成有效文本回复，请补充更精确的物料编码、仓库名称或查询条件后重试。"
+)
+
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=16_000)
@@ -106,6 +110,7 @@ class ChatResponse(BaseModel):
 class StartedTurn:
     conversation_id: str
     messages: list[Msg]
+    previous_user_messages: list[str]
 
 
 @router.get("/conversations", response_model=ConversationListResponse)
@@ -229,7 +234,10 @@ async def chat(
         db,
         repository,
     )
-    decision = IntentGate().route(payload.message)
+    decision = IntentGate().route_with_context(
+        payload.message,
+        turn.previous_user_messages,
+    )
     fixed = _fixed_policy_response(decision, turn.conversation_id)
     if fixed is not None:
         await _persist_assistant(db, repository, turn.conversation_id, fixed.message)
@@ -270,7 +278,10 @@ async def chat_stream(
         db,
         repository,
     )
-    decision = IntentGate().route(payload.message)
+    decision = IntentGate().route_with_context(
+        payload.message,
+        turn.previous_user_messages,
+    )
     fixed = _fixed_policy_response(decision, turn.conversation_id)
     if fixed is not None:
         await _persist_assistant(db, repository, turn.conversation_id, fixed.message)
@@ -370,6 +381,7 @@ async def _start_turn(
     return StartedTurn(
         conversation_id=conversation.conversation_id,
         messages=_conversation_messages(history, message),
+        previous_user_messages=[turn.content for turn in history if turn.role == "user"],
     )
 
 
@@ -526,7 +538,11 @@ async def _reply_events(
                 )
             elif isinstance(event, ReplyEndEvent):
                 reply_text = "".join(text_chunks).strip()
-                if on_complete is not None and reply_text:
+                if not reply_text:
+                    reply_text = EMPTY_REPLY_FALLBACK
+                    text_chunks.append(reply_text)
+                    yield _sse("text_delta", {"delta": reply_text})
+                if on_complete is not None:
                     await on_complete(reply_text)
                 reason = getattr(event.finished_reason, "value", str(event.finished_reason))
                 yield _sse("done", {"finished_reason": reason})

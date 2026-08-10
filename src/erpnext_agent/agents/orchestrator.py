@@ -41,3 +41,22 @@ class IntentGate:
             return RouteDecision(Intent.DATA, "data_agent", "read-only intent detected")
         return RouteDecision(Intent.CLARIFY, None, "intent is incomplete")
 
+    def route_with_context(
+        self,
+        message: str,
+        previous_user_messages: list[str],
+    ) -> RouteDecision:
+        """Inherit the latest explicit intent only for an incomplete follow-up."""
+
+        current = self.route(message)
+        if current.intent != Intent.CLARIFY:
+            return current
+        for previous_message in reversed(previous_user_messages):
+            previous = self.route(previous_message)
+            if previous.intent != Intent.CLARIFY:
+                return RouteDecision(
+                    intent=previous.intent,
+                    target_agent=previous.target_agent,
+                    reason=f"follow-up to previous {previous.intent.value} intent",
+                )
+        return current

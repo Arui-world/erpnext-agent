@@ -108,7 +108,9 @@ class ERPNextMCPTool(ToolBase):
         }
         return ToolChunk(
             content=[TextBlock(text=_json_text(result))],
-            state=ToolResultState.RUNNING,
+            # This ToolBase waits for the MCP request to finish before returning.
+            # RUNNING would make AgentScope keep the ReAct loop open until max_iters.
+            state=ToolResultState.SUCCESS,
             metadata={
                 "content_trust": envelope.content_trust,
                 **safe_meta,

@@ -81,7 +81,7 @@ async def test_tool_preserves_schema_and_structured_content() -> None:
 
     chunk = await tool.call(query="Sales Order")
     assert tool.input_schema == spec["inputSchema"]
-    assert chunk.state == ToolResultState.RUNNING
+    assert chunk.state == ToolResultState.SUCCESS
     assert isinstance(chunk.content[0], TextBlock)
     payload = json.loads(chunk.content[0].text)
     assert payload == {
