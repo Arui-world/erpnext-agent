@@ -46,6 +46,13 @@ from erpnext_agent.conversations.repository import (
 from erpnext_agent.conversations.repository import (
     ConversationSummary as StoredConversationSummary,
 )
+from erpnext_agent.inventory import (
+    InventoryIdentityError,
+    InventoryService,
+    MultiWarehouseStockResult,
+    extract_multiwarehouse_stock_item,
+    format_multiwarehouse_stock,
+)
 from erpnext_agent.mcp.adapter import MCPError
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -243,6 +250,23 @@ async def chat(
         await _persist_assistant(db, repository, turn.conversation_id, fixed.message)
         return fixed
 
+    inventory_item = extract_multiwarehouse_stock_item(payload.message)
+    if decision.intent == Intent.DATA and inventory_item is not None:
+        inventory = await _positive_stock_by_warehouse(
+            request,
+            session,
+            db,
+            inventory_item,
+        )
+        text = format_multiwarehouse_stock(inventory)
+        await _persist_assistant(db, repository, turn.conversation_id, text)
+        return ChatResponse(
+            status="completed",
+            route="inventory_by_warehouse",
+            message=text,
+            conversation_id=turn.conversation_id,
+        )
+
     runtime = await _prepare_runtime(request, session, db)
     agent = runtime.agent_for(decision.intent)
     try:
@@ -293,6 +317,22 @@ async def chat_stream(
 
         return StreamingResponse(
             fixed_events(),
+            media_type="text/event-stream",
+            headers={"X-Accel-Buffering": "no"},
+        )
+
+    inventory_item = extract_multiwarehouse_stock_item(payload.message)
+    if decision.intent == Intent.DATA and inventory_item is not None:
+        inventory = await _positive_stock_by_warehouse(
+            request,
+            session,
+            db,
+            inventory_item,
+        )
+        text = format_multiwarehouse_stock(inventory)
+        await _persist_assistant(db, repository, turn.conversation_id, text)
+        return StreamingResponse(
+            _inventory_events(turn.conversation_id, inventory, text),
             media_type="text/event-stream",
             headers={"X-Accel-Buffering": "no"},
         )
@@ -405,11 +445,28 @@ async def _prepare_runtime(
     session: AgentSession,
     db: AsyncSession,
 ) -> PreparedAgentRuntime:
-    token_store = cast(TokenStore, request.app.state.token_store)
+    credential = await _load_credential(request, session, db)
     runtime_factory = cast(
         AgentRuntimeFactory,
         request.app.state.agent_runtime_factory,
     )
+    try:
+        return await runtime_factory.prepare(
+            access_token=credential.access_token,
+            expected_user=session.user_id,
+        )
+    except AgentIdentityError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except MCPError as exc:
+        raise _mcp_http_exception(exc) from exc
+
+
+async def _load_credential(
+    request: Request,
+    session: AgentSession,
+    db: AsyncSession,
+) -> StoredCredential:
+    token_store = cast(TokenStore, request.app.state.token_store)
     try:
         credential: StoredCredential = await token_store.get(
             db,
@@ -419,20 +476,35 @@ async def _prepare_runtime(
         raise HTTPException(status_code=401, detail="OAuth credential not found") from exc
     if credential.revoked_at is not None:
         raise HTTPException(status_code=401, detail="OAuth credential is revoked")
+    return credential
 
+
+async def _positive_stock_by_warehouse(
+    request: Request,
+    session: AgentSession,
+    db: AsyncSession,
+    requested_item: str,
+) -> MultiWarehouseStockResult:
+    credential = await _load_credential(request, session, db)
+    inventory_service = cast(InventoryService, request.app.state.inventory_service)
     try:
-        return await runtime_factory.prepare(
+        return await inventory_service.positive_stock_by_warehouse(
             access_token=credential.access_token,
             expected_user=session.user_id,
+            requested_item=requested_item,
         )
-    except AgentIdentityError as exc:
+    except InventoryIdentityError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except MCPError as exc:
-        status_code = 401 if exc.code == "MCP_AUTH_FAILED" else 502
-        raise HTTPException(
-            status_code=status_code,
-            detail={"code": exc.code, "message": str(exc), "trace_id": exc.trace_id},
-        ) from exc
+        raise _mcp_http_exception(exc) from exc
+
+
+def _mcp_http_exception(exc: MCPError) -> HTTPException:
+    status_code = 401 if exc.code == "MCP_AUTH_FAILED" else 502
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": exc.code, "message": str(exc), "trace_id": exc.trace_id},
+    )
 
 
 def _fixed_policy_response(
@@ -498,6 +570,24 @@ async def _persistent_reply_events(
 
     async for event in _reply_events(agent, turn.messages, on_complete=persist_reply):
         yield event
+
+
+async def _inventory_events(
+    conversation_id: str,
+    result: MultiWarehouseStockResult,
+    text: str,
+) -> AsyncIterator[str]:
+    yield _sse("conversation", {"conversation_id": conversation_id})
+    for index, tool_name in enumerate(result.tool_calls, start=1):
+        tool_call_id = f"inventory-{index}"
+        yield _sse(
+            "tool_call_start",
+            {"tool_call_id": tool_call_id, "tool_name": tool_name},
+        )
+        yield _sse("tool_result_start", {"tool_call_id": tool_call_id})
+        yield _sse("tool_result_end", {"tool_call_id": tool_call_id})
+    yield _sse("text_delta", {"delta": text})
+    yield _sse("done", {"finished_reason": "completed"})
 
 
 async def _reply_events(

@@ -1,7 +1,7 @@
 # ERPNext Agent 开发进度
 
 > 最后更新：2026-08-10
-> 当前阶段：真实 OAuth 身份下的多轮库存查询闭环完成
+> 当前阶段：真实 OAuth 身份下的物料多仓正库存自动查询完成
 > 进度记录原则：每次开发任务完成后更新本文，记录实际完成内容、验证证据、遗留项和下一步。
 
 ## 一、当前状态
@@ -21,9 +21,9 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 `conversation_id`；服务端从 PostgreSQL 恢复用户/站点/模式隔离的历史并交给新建 Agent。
 左侧历史侧栏会列出持久化会话，支持切换和创建独立新对话，页面刷新时恢复最近会话。
 
-真实 ERPNext OAuth 用户的 Data Agent 库存查询已完成端到端验证。当物料编码或完整
-仓库名称缺失时，Agent 会先澄清；用户在后续消息中补齐参数后，意图路由会继承最近的
-明确上下文，调用一次 `erpnext_get_stock_balance` 并将回复持久化。
+真实 ERPNext OAuth 用户的库存查询已完成单仓和多仓两条端到端链路。指定精确仓库时使用
+`erpnext_get_stock_balance`；只提供物料编码或唯一物料名称时，后端会直接以当前 OAuth
+身份查询 Item 和 `actual_qty > 0` 的 Bin，返回所有正库存仓库，不再要求用户先指定仓库。
 
 ## 二、已经完成
 
@@ -53,6 +53,7 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 - Chat 和 SSE 均使用 OAuth Session 与 CSRF 防护；
 - 查询/巡检中的模型或 MCP 失败对客户端返回稳定错误，不泄露凭据和底层连接信息。
 - 流式 Agent 在结束事件中没有文本时，会返回并持久化可重试提示，不再向前端透传空回复；
+- Chat 和 SSE 对常见“物料的库存”表达接入确定性多仓查询，流中仍返回工具状态和完成事件；
 - 新增受 Session/CSRF 保护的 `/api/v1/chat/model/stream`，用于无工具模型多轮对话；
 - 新增根路径聊天页面和本地 CSS/JavaScript 静态资源，不依赖外部 CDN；
 - 页面支持模型/ERPNext Agent 模式切换、快捷问题、流式文本、工具状态和响应式布局。
@@ -90,7 +91,7 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 - 建立 Orchestrator、Data、Action 和 Patrol Agent 构造边界与系统提示；
 - 建立保守的确定性意图门控；
 - 当前消息意图不完整时，只继承最近一条明确的用户意图；当前消息的禁止或写操作关键词仍优先；
-- 库存工具必须收齐精确 `item_code` 与完整 `warehouse`，缺失时文本澄清，不自行反复枚举；
+- 指定仓库时使用单仓库存工具；未指定仓库但物料明确时自动查询正库存 Bin；
 - 每次请求创建独立 Agent 与 Toolkit，不共享用户 access token 或会话状态；
 - Agent 运行前再次核对 Agent Session 用户与 MCP 当前用户；
 - Data/Patrol 已接入模型工具循环，Action 意图在聊天层停在持久化审批入口；
@@ -127,14 +128,25 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 - 左侧响应式历史栏支持新建、切换和移动端展开/收起；
 - 新增 `memory_smoke`，用随机码执行两轮真实模型调用并直接回查 PostgreSQL。
 
+### 2.8 确定性多仓库存
+
+- 支持“`test item1的库存`”、“查询物料 `test item1` 库存”等常见无仓库表达；
+- 优先按 Item `name` 精确匹配，未命中时按 `item_name` 匹配；
+- 物料唯一时自动分页查询 Bin，强制 `item_code` 匹配且 `actual_qty > 0`；
+- 返回每个正库存仓库的实际、预留和预计数量，并计算实际库存合计；
+- 空结果明确说明无正库存，多个同名物料则请用户选择精确物料编码；
+- 查询前仍核对 Agent Session 与 MCP 当前用户，Item/Bin 列表仍由 Frappe RBAC 和 User Permission 裁剪；
+- 每页 100 条、最多 10 页，超过 1000 条时明确标记截断；
+- 确定性回复在 SSE `done` 前写入 PostgreSQL，不依赖大模型规划这一固定查询。
+
 ## 三、验证证据
 
 | 检查项 | 结果 |
 |---|---|
 | `uv.lock` 依赖解析 | 通过，锁定 AgentScope 2.0.5 |
-| Pytest | 38 项通过，包含 MCP 终态、上下文路由和空流式回复回归测试 |
+| Pytest | 47 项通过，包含物料提取、OAuth 身份、Item/Bin 参数和多仓回复测试 |
 | Ruff | 通过，无问题 |
-| Mypy strict | 通过，检查 56 个源码文件 |
+| Mypy strict | 通过，检查 57 个源码文件 |
 | Docker Compose config | 通过 |
 | Docker 镜像构建 | 通过，生成 `erpnext-agent:local` |
 | 真实模型请求 | 通过，容器实际收到回复“千问模型连接成功。” |
@@ -147,6 +159,9 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 | 多轮库存查询 | 通过，三轮澄清后单次调用 `erpnext_get_stock_balance` |
 | 真实库存结果 | `test item1` / `Stores - TQC` 返回 `0.0 Nos`、库存价值 `0.0 INR` |
 | Agent 会话落库 | 通过，三轮会话持久化 6 条 user/assistant 消息 |
+| 无仓库物料库存请求 | 通过，只输入“`test item1的库存`”，未追问仓库 |
+| 真实多仓正库存 | 返回 `仓库 - rw`：实际 `10.0 Nos`、预留 `0.0 Nos`、预计 `10.0 Nos` |
+| 多仓会话落库 | 通过，会话 `10279862-b845-451c-b4e6-587a2c590a60` 持久化 2 条消息 |
 | 会话列表与新建 | 通过，列表返回 4 条消息计数，新建会话获得独立 UUID |
 | 前端静态资源 | Node 语法检查通过，运行中 HTML/CSS/JS 均包含新版多会话组件 |
 | Redis 连接 | 通过 |
@@ -164,6 +179,7 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 - 尚未建立 Alembic 等正式数据库迁移流程；
 - OpenTelemetry 当前只有接入边界，尚未配置正式 exporter 和 Trace；
 - 40 个评估场景目前只有目录骨架，尚未实现 Runner 与报告。
+- 确定性多仓查询当前为常见无仓库表达提取，更复杂的口语化复合问题仍交给 Data Agent；
 
 ## 五、下一阶段建议
 
@@ -172,7 +188,7 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 3. 把草稿预览接入持久化 Action 审批与执行入口；
 4. 在现有持久化消息基础上实现自动摘要、会话重命名/删除和数据保留策略；
 5. 增加正式数据库迁移和 Action 重启恢复流程；
-6. 将本次真实库存查询纳入可重复的集成测试 Runner，并开始构建安全评估场景。
+6. 将单仓与多仓真实库存查询纳入可重复的集成测试 Runner，并开始构建安全评估场景。
 
 ## 六、进度文档维护约定
 
