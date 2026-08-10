@@ -3,6 +3,7 @@ from collections.abc import Iterator
 import pytest
 from agentscope.model import DashScopeChatModel, OpenAIChatModel
 from agentscope.tool import Toolkit
+from pydantic import SecretStr
 
 from erpnext_agent.agents.factory import ConfiguredAgentFactory
 from erpnext_agent.agents.model_factory import ModelConfigurationError, build_chat_model
@@ -20,19 +21,19 @@ def settings_from_environment(monkeypatch: pytest.MonkeyPatch, **model_env: str)
     for name, value in model_env.items():
         monkeypatch.setenv(name, value)
     return Settings(
-        _env_file=None,
+        _env_file=None,  # type: ignore[call-arg]  # BaseSettings runtime option
         database_url="postgresql+asyncpg://agent:password@postgres/agent",
-        redis_url="redis://:password@redis/0",
+        redis_url=SecretStr("redis://:password@redis/0"),
         erpnext_base_url="http://erpnext:8000",
         erpnext_site="dev.localhost",
         oauth_client_id="client-id",
-        oauth_client_secret="client-secret",  # noqa: S106 - inert test fixture
+        oauth_client_secret=SecretStr("client-secret"),  # noqa: S106
         oauth_redirect_uri="http://localhost:8001/api/v1/auth/callback",
-        session_secret=(  # noqa: S106 - inert test fixture
-            "a-session-secret-with-at-least-32-characters"
+        session_secret=SecretStr(  # noqa: S106 - inert test fixture
+            "a-session-secret-with-at-least-32-characters",
         ),
-        token_encryption_key=(  # noqa: S106 - deterministic test-only Fernet key
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        token_encryption_key=SecretStr(  # noqa: S106 - deterministic test key
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         ),
     )
 

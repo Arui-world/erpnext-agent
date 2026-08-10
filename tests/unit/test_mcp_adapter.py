@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 
 from erpnext_agent.mcp.adapter import (
@@ -55,7 +57,9 @@ def test_business_failure_is_not_treated_as_success() -> None:
         ({"result": {"isError": False}}, MCPContractError),
     ],
 )
-def test_all_protocol_layers_fail_closed(payload: dict, error_type: type[Exception]) -> None:
+def test_all_protocol_layers_fail_closed(
+    payload: dict[str, Any],
+    error_type: type[Exception],
+) -> None:
     with pytest.raises(error_type):
         normalize_tool_response(payload)
-

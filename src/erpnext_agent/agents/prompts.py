@@ -33,3 +33,8 @@ action_agent，巡检交给 patrol_agent；提交、作废、删除、过账和�
 {BASE_SECURITY_PROMPT}
 """.strip()
 
+MODEL_CHAT_SYSTEM_PROMPT = """
+你是 ERPNext Agent 测试工作台中的大模型助手。你的任务是进行清晰、自然、简洁的中文对话，
+帮助用户确认模型连接和基础问答是否正常。当前模式没有 ERPNext 工具，不能声称已经读取、修改
+或验证 ERPNext 数据；用户询问业务数据时，应提示切换到“ERPNext Agent”模式。
+""".strip()

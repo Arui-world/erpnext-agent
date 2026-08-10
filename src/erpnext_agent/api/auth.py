@@ -87,12 +87,14 @@ async def callback(
         )
         raw_profile = await request.app.state.oauth_client.fetch_profile(token.access_token)
         profile = _profile_data(raw_profile)
-        oauth_user = profile.get("email") or profile.get("sub")
-        oauth_subject = profile.get("sub") or oauth_user
-        if not isinstance(oauth_user, str) or not isinstance(oauth_subject, str):
+        frappe_user = await request.app.state.oauth_client.fetch_logged_user(
+            token.access_token
+        )
+        oauth_subject = profile.get("sub") or profile.get("email") or frappe_user
+        if not isinstance(oauth_subject, str):
             raise OAuthError("ERPNext profile did not contain a stable user identity")
         mcp_user = await request.app.state.mcp_adapter.current_user(token.access_token)
-        if not secrets.compare_digest(oauth_user.casefold(), mcp_user.casefold()):
+        if not secrets.compare_digest(frappe_user.casefold(), mcp_user.casefold()):
             raise OAuthError("OAuth and MCP identities do not match")
     except (OAuthError, MCPError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

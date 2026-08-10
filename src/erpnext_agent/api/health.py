@@ -41,6 +41,8 @@ async def ready(request: Request, response: Response) -> dict[str, Any]:
             "oauth": True,
             "approval_persistence": True,
             "model_configured": model_configuration_is_complete(request.app.state.settings),
-            "agent_chat_runtime": False,
+            "agent_chat_runtime": model_configuration_is_complete(
+                request.app.state.settings
+            ),
         },
     }

@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 FROM ghcr.io/astral-sh/uv:0.8.8 AS uv
 
 FROM python:3.12-slim-bookworm AS runtime
@@ -26,6 +25,6 @@ USER app
 EXPOSE 8001
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
-  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=3)"]
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=3); urllib.request.urlopen('http://127.0.0.1:8001/', timeout=3)"]
 
 CMD ["uvicorn", "erpnext_agent.main:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]

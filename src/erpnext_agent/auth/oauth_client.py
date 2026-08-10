@@ -60,21 +60,28 @@ class OAuthClient:
     @property
     def token_endpoint(self) -> str:
         return urljoin(
-            self._settings.erpnext_base_url + "/",
+            self._settings.effective_erpnext_internal_url + "/",
             "api/method/frappe.integrations.oauth2.get_token",
         )
 
     @property
     def profile_endpoint(self) -> str:
         return urljoin(
-            self._settings.erpnext_base_url + "/",
+            self._settings.effective_erpnext_internal_url + "/",
             "api/method/frappe.integrations.oauth2.openid_profile",
+        )
+
+    @property
+    def logged_user_endpoint(self) -> str:
+        return urljoin(
+            self._settings.effective_erpnext_internal_url + "/",
+            "api/method/frappe.auth.get_logged_user",
         )
 
     @property
     def revoke_endpoint(self) -> str:
         return urljoin(
-            self._settings.erpnext_base_url + "/",
+            self._settings.effective_erpnext_internal_url + "/",
             "api/method/frappe.integrations.oauth2.revoke_token",
         )
 
@@ -113,14 +120,7 @@ class OAuthClient:
 
     async def _token_request(self, form: dict[str, str]) -> OAuthTokenSet:
         try:
-            response = await self._http.post(
-                self.token_endpoint,
-                data=form,
-                auth=httpx.BasicAuth(
-                    self._settings.oauth_client_id,
-                    self._settings.oauth_client_secret.get_secret_value(),
-                ),
-            )
+            response = await self._client_authenticated_post(self.token_endpoint, form)
             response.raise_for_status()
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -142,7 +142,10 @@ class OAuthClient:
         try:
             response = await self._http.get(
                 self.profile_endpoint,
-                headers={"Authorization": f"Bearer {access_token}"},
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Host": self._settings.erpnext_host_header,
+                },
             )
             response.raise_for_status()
             payload = response.json()
@@ -152,21 +155,60 @@ class OAuthClient:
             raise OAuthError("ERPNext profile response was invalid")
         return payload
 
+    async def fetch_logged_user(self, access_token: str) -> str:
+        """Return the canonical Frappe User ID bound to an OAuth access token."""
+        try:
+            response = await self._http.get(
+                self.logged_user_endpoint,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Host": self._settings.erpnext_host_header,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise OAuthError("Unable to verify the ERPNext session identity") from exc
+        user = payload.get("message") if isinstance(payload, dict) else None
+        if not isinstance(user, str) or not user:
+            raise OAuthError("ERPNext session did not contain a user identity")
+        return user
+
     async def revoke(self, access_token: str) -> None:
         try:
-            response = await self._http.post(
+            response = await self._client_authenticated_post(
                 self.revoke_endpoint,
-                data={"token": access_token},
-                auth=httpx.BasicAuth(
-                    self._settings.oauth_client_id,
-                    self._settings.oauth_client_secret.get_secret_value(),
-                ),
+                {"token": access_token},
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise OAuthError("ERPNext token revocation failed") from exc
 
+    async def _client_authenticated_post(
+        self,
+        endpoint: str,
+        form: dict[str, str],
+    ) -> httpx.Response:
+        headers = {"Host": self._settings.erpnext_host_header}
+        if (
+            self._settings.oauth_token_endpoint_auth_method == "client_secret_basic"  # noqa: S105
+        ):
+            return await self._http.post(
+                endpoint,
+                data=form,
+                headers=headers,
+                auth=httpx.BasicAuth(
+                    self._settings.oauth_client_id,
+                    self._settings.oauth_client_secret.get_secret_value(),
+                ),
+            )
+        request_form = {
+            **form,
+            "client_id": self._settings.oauth_client_id,
+            "client_secret": self._settings.oauth_client_secret.get_secret_value(),
+        }
+        return await self._http.post(endpoint, data=request_form, headers=headers)
+
 
 def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
-

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta
+      name="description"
+      content="ERPNext Agent 模型与业务助手测试工作台"
+    />
+    <title>ERPNext Agent</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell history-collapsed">
+      <aside class="rail" aria-label="应用导航">
+        <a class="brand-mark" href="/" aria-label="ERPNext Agent 首页">A</a>
+        <nav class="rail-nav" aria-label="主要导航">
+          <button id="new-conversation-button" class="rail-button" type="button" aria-label="新对话" title="新对话">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
+          <button id="history-toggle-button" class="rail-button active" type="button" aria-label="对话记录" title="对话记录" aria-expanded="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16M4 12h12M4 17h8" />
+            </svg>
+          </button>
+        </nav>
+        <div class="rail-spacer"></div>
+        <span class="rail-version">v0.1</span>
+      </aside>
+
+      <aside id="history-panel" class="history-panel" aria-label="历史对话">
+        <div class="history-header">
+          <div>
+            <div class="history-eyebrow">工作空间</div>
+            <h2>历史对话</h2>
+          </div>
+          <button id="panel-new-conversation-button" class="new-chat-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            新对话
+          </button>
+        </div>
+        <div id="history-status" class="history-status">登录后显示历史对话</div>
+        <nav id="conversation-list" class="conversation-list" aria-label="对话列表"></nav>
+        <div class="history-footer">
+          <span>对话由 PostgreSQL 持久化保存</span>
+        </div>
+      </aside>
+
+      <button id="history-backdrop" class="history-backdrop" type="button" aria-label="关闭历史对话"></button>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="title-group">
+            <div class="product-name">ERPNext Agent</div>
+            <div class="connection-line">
+              <span id="connection-dot" class="connection-dot pending"></span>
+              <span id="connection-label">正在检查会话</span>
+            </div>
+          </div>
+
+          <div class="topbar-actions">
+            <div class="mode-switch" role="group" aria-label="对话模式">
+              <button class="mode-button active" type="button" data-mode="model">
+                模型对话
+              </button>
+              <button class="mode-button" type="button" data-mode="agent">
+                ERPNext Agent
+              </button>
+            </div>
+            <a id="login-button" class="secondary-button hidden" href="/api/v1/auth/login?return_to=/">
+              登录 ERPNext
+            </a>
+            <button id="logout-button" class="icon-button hidden" type="button" aria-label="退出登录" title="退出登录">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M9 12h9" />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <section id="conversation" class="conversation" aria-live="polite" aria-label="对话内容">
+          <div id="conversation-inner" class="conversation-inner"></div>
+        </section>
+
+        <section class="composer-region" aria-label="发送消息">
+          <div id="suggestions" class="suggestions" aria-label="快捷问题"></div>
+          <form id="composer" class="composer">
+            <textarea
+              id="message-input"
+              rows="1"
+              maxlength="8000"
+              placeholder="登录后即可开始对话"
+              aria-label="输入消息"
+              disabled
+            ></textarea>
+            <div class="composer-footer">
+              <div class="composer-hint">
+                <span id="mode-hint">仅测试大模型，不调用 ERPNext 工具</span>
+                <span class="key-hint">Shift + Enter 换行</span>
+              </div>
+              <button id="send-button" class="send-button" type="submit" disabled aria-label="发送消息">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 19V5M6 11l6-6 6 6" />
+                </svg>
+              </button>
+            </div>
+          </form>
+          <p class="disclaimer">模型输出可能不准确；涉及 ERPNext 数据时请核对原始单据。</p>
+        </section>
+      </main>
+    </div>
+
+    <template id="message-template">
+      <article class="message-row">
+        <div class="assistant-avatar" aria-hidden="true">A</div>
+        <div class="message-content">
+          <div class="message-meta"></div>
+          <div class="bubble"></div>
+          <div class="tool-state hidden"></div>
+        </div>
+      </article>
+    </template>
+  </body>
+</html>

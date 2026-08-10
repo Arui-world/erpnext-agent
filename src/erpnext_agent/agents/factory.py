@@ -11,6 +11,7 @@ from erpnext_agent.agents.model_factory import build_chat_model
 from erpnext_agent.agents.prompts import (
     ACTION_SYSTEM_PROMPT,
     DATA_SYSTEM_PROMPT,
+    MODEL_CHAT_SYSTEM_PROMPT,
     ORCHESTRATOR_SYSTEM_PROMPT,
     PATROL_SYSTEM_PROMPT,
 )
@@ -56,6 +57,18 @@ class ConfiguredAgentFactory:
             action_toolkit=action_toolkit,
             patrol_toolkit=patrol_toolkit,
             max_retries=self._settings.model_max_retries,
+        )
+
+    def build_model_chat_agent(self) -> Agent:
+        """Create a request-scoped, tool-free agent for model connectivity chat."""
+
+        return Agent(
+            name="model_assistant",
+            system_prompt=MODEL_CHAT_SYSTEM_PROMPT,
+            model=self.model,
+            toolkit=Toolkit(),
+            model_config=ModelConfig(max_retries=self._settings.model_max_retries),
+            react_config=ReActConfig(max_iters=2, stop_on_reject=True),
         )
 
 

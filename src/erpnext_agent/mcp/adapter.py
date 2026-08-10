@@ -91,10 +91,12 @@ class ERPNextMCPAdapter:
         url: str,
         http: httpx.AsyncClient,
         verify_contract: bool = True,
+        host_header: str | None = None,
     ) -> None:
         self._url = url
         self._http = http
         self._verify_contract = verify_contract
+        self._host_header = host_header
         self._ids = itertools.count(1)
 
     async def initialize(self, access_token: str) -> dict[str, Any]:
@@ -151,12 +153,17 @@ class ERPNextMCPAdapter:
         )
         return normalize_tool_response(payload)
 
-    async def current_user(self, access_token: str) -> str:
+    async def current_user(
+        self,
+        access_token: str,
+        *,
+        discover_first: bool = True,
+    ) -> str:
         envelope = await self.call_tool(
             access_token=access_token,
             name="erpnext_get_current_user",
             arguments={},
-            discover_first=True,
+            discover_first=discover_first,
         )
         if not isinstance(envelope.data, dict):
             raise MCPContractError("Current-user response has no user", code="INVALID_IDENTITY")
@@ -181,7 +188,7 @@ class ERPNextMCPAdapter:
             response = await self._http.post(
                 self._url,
                 json=body,
-                headers={"Authorization": f"Bearer {access_token}"},
+                headers=self._headers(access_token),
             )
         except httpx.HTTPError as exc:
             raise MCPTransportError("Unable to reach ERPNext MCP", code="MCP_UNAVAILABLE") from exc
@@ -213,7 +220,7 @@ class ERPNextMCPAdapter:
             response = await self._http.post(
                 self._url,
                 json={"jsonrpc": "2.0", "method": method, "params": params},
-                headers={"Authorization": f"Bearer {access_token}"},
+                headers=self._headers(access_token),
             )
         except httpx.HTTPError as exc:
             raise MCPTransportError(
@@ -225,3 +232,9 @@ class ERPNextMCPAdapter:
                 "ERPNext MCP rejected initialization",
                 code=f"HTTP_{response.status_code}",
             )
+
+    def _headers(self, access_token: str) -> dict[str, str]:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        if self._host_header:
+            headers["Host"] = self._host_header
+        return headers

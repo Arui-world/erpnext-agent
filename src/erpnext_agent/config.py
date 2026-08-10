@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Literal
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from cryptography.fernet import Fernet
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     redis_url: SecretStr
 
     erpnext_base_url: str
+    erpnext_internal_url: str | None = None
     erpnext_mcp_url: str | None = None
     erpnext_site: str
     mcp_http_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
@@ -47,6 +48,10 @@ class Settings(BaseSettings):
 
     oauth_client_id: str
     oauth_client_secret: SecretStr
+    oauth_token_endpoint_auth_method: Literal[
+        "client_secret_basic",
+        "client_secret_post",
+    ] = "client_secret_post"  # noqa: S105 - OAuth method identifier
     oauth_redirect_uri: str
     oauth_scope: str = "all openid"
     oauth_state_ttl_seconds: int = Field(default=600, ge=60, le=1800)
@@ -60,6 +65,11 @@ class Settings(BaseSettings):
     token_encryption_key_version: str = "v1"  # noqa: S105 - identifier, not a secret
 
     action_ttl_seconds: int = Field(default=900, ge=60, le=86_400)
+
+    chat_history_max_messages: int = Field(default=20, ge=2, le=100)
+    chat_history_max_chars: int = Field(default=24_000, ge=4_000, le=100_000)
+    chat_history_display_limit: int = Field(default=100, ge=10, le=500)
+    chat_conversation_list_limit: int = Field(default=50, ge=10, le=200)
 
     model_provider: Literal["dashscope", "openai", "openai_compatible"] = "openai_compatible"
     model_name: str = ""
@@ -81,7 +91,12 @@ class Settings(BaseSettings):
     def normalize_prefix(cls, value: str) -> str:
         return "/" + value.strip("/")
 
-    @field_validator("model_base_url", "otel_exporter_otlp_endpoint", mode="before")
+    @field_validator(
+        "erpnext_internal_url",
+        "model_base_url",
+        "otel_exporter_otlp_endpoint",
+        mode="before",
+    )
     @classmethod
     def empty_string_to_none(cls, value: object) -> object:
         return None if value == "" else value
@@ -120,11 +135,22 @@ class Settings(BaseSettings):
         return self
 
     @property
+    def effective_erpnext_internal_url(self) -> str:
+        return (self.erpnext_internal_url or self.erpnext_base_url).rstrip("/")
+
+    @property
+    def erpnext_host_header(self) -> str:
+        host = urlsplit(self.erpnext_base_url).netloc
+        if not host:
+            raise ValueError("ERPNEXT_BASE_URL must contain a hostname")
+        return host
+
+    @property
     def effective_mcp_url(self) -> str:
         if self.erpnext_mcp_url:
             return self.erpnext_mcp_url
         return urljoin(
-            self.erpnext_base_url + "/",
+            self.effective_erpnext_internal_url + "/",
             "api/method/erpnext_mcp_tools.mcp.handle_mcp",
         )
 

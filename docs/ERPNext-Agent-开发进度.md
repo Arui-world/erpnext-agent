@@ -1,18 +1,25 @@
 # ERPNext Agent 开发进度
 
 > 最后更新：2026-08-09  
-> 当前阶段：Agent 服务骨架及模型环境配置链路完成  
+> 当前阶段：PostgreSQL 消息持久化、多会话历史前端与真实模型记忆完成
 > 进度记录原则：每次开发任务完成后更新本文，记录实际完成内容、验证证据、遗留项和下一步。
 
 ## 一、当前状态
 
-ERPNext Agent 第一阶段工程骨架已经完成。项目目前可以通过 Docker Compose 启动 FastAPI、
-PostgreSQL 和 Redis，并具备 OAuth、Session、MCP Adapter、Agent 工具策略和持久化审批等基础
-代码边界。
+ERPNext Agent 第一阶段工程骨架和第二阶段最小只读运行时已经完成。项目可以通过 Docker
+Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP Adapter、Agent
+工具策略和持久化审批等基础代码边界。
 
-模型 Provider 已经可以从环境变量构造，Agent Factory 也会把模型和用户专属 Toolkit 组装成
-四类 Agent。当前聊天接口仍只完成确定性意图门控，尚未接入真实模型调用和完整 AgentScope
-ToolBase 运行时。
+模型 Provider 已经可以从环境变量构造。登录用户发起查询或巡检时，服务会读取其加密 OAuth
+凭据、核对 MCP 当前用户、发现工具并创建本次请求专属的 Toolkit 与 Agent。普通回复和
+`reply_stream()` SSE 均已接入 Chat API；草稿写入仍被持久化审批边界阻断，不会从聊天接口
+直接执行。
+
+服务根路径已提供响应式聊天工作台。页面默认进入无工具的“模型对话”模式，也可以切换到
+“ERPNext Agent”模式；助手消息位于左侧，用户消息位于右侧，并支持流式文本、工具状态、
+多轮模型上下文和 OAuth 登录状态展示。浏览器不再上传历史内容，只携带当前消息与
+`conversation_id`；服务端从 PostgreSQL 恢复用户/站点/模式隔离的历史并交给新建 Agent。
+左侧历史侧栏会列出持久化会话，支持切换和创建独立新对话，页面刷新时恢复最近会话。
 
 ## 二、已经完成
 
@@ -23,7 +30,7 @@ ToolBase 运行时。
 - 固定 `agentscope==2.0.5`；
 - 配置 FastAPI、HTTPX、Redis、SQLAlchemy、asyncpg、cryptography 等依赖；
 - 生成并提交 `uv.lock`，锁文件包含 AgentScope 2.0.5；
-- 配置 Ruff、Mypy 和 Pytest。
+- 配置 Ruff、Mypy 和 Pytest；
 - 实现 `MODEL_PROVIDER`、`MODEL_NAME`、`MODEL_API_KEY`、`MODEL_BASE_URL` 到 AgentScope
   ChatModel 的配置链路；
 - 支持 DashScope、OpenAI 和 OpenAI-compatible 三类模型 Provider；
@@ -37,13 +44,19 @@ ToolBase 运行时。
 - 完成 `/health/live` 与 `/health/ready`；
 - 完成 Request ID、安全响应头、Trusted Host 和 CORS 基础配置；
 - 完成 OAuth、Chat 和 Approval 路由骨架；
-- Chat 接口已接入确定性意图门控，并明确标识模型运行时尚未配置。
+- Chat 接口已接入确定性意图门控和真实 AgentScope 回复运行时；
+- `POST /api/v1/chat/stream` 已把文本增量、工具开始/结束和完成事件转换为 SSE；
+- Chat 和 SSE 均使用 OAuth Session 与 CSRF 防护；
+- 查询/巡检中的模型或 MCP 失败对客户端返回稳定错误，不泄露凭据和底层连接信息。
+- 新增受 Session/CSRF 保护的 `/api/v1/chat/model/stream`，用于无工具模型多轮对话；
+- 新增根路径聊天页面和本地 CSS/JavaScript 静态资源，不依赖外部 CDN；
+- 页面支持模型/ERPNext Agent 模式切换、快捷问题、流式文本、工具状态和响应式布局。
 
 ### 2.3 OAuth 与 Session
 
 - 实现 OAuth 2.0 Authorization Code + PKCE S256；
 - 使用一次性 Redis OAuth state 和登录尝试 Cookie；
-- OAuth callback 会核对 OpenID Profile 与 MCP 当前用户；
+- OAuth callback 使用 `frappe.auth.get_logged_user` 的规范 User ID 核对 MCP 当前用户；
 - OAuth access/refresh token 使用 Fernet 加密后存入 PostgreSQL；
 - 浏览器只保存不透明 HttpOnly Agent Session Cookie；
 - Redis Session key 使用服务端 HMAC，不保存明文 Session ID；
@@ -57,14 +70,21 @@ ToolBase 运行时。
 - 正常结果只消费 `structuredContent`，避免重复注入文本副本；
 - 业务数据统一标记为 `untrusted_business_data`；
 - 运行时发现工具后可核对既定的 13 个 MCP 工具；
+- 实现自定义 `ERPNextMCPTool(ToolBase)`，原样保留服务器 `inputSchema`；
+- ToolBase 只向模型传递结构化 `data`、内容信任标记和白名单元数据；
+- MCP 领域错误转换为 AgentScope 错误 ToolChunk，并保留安全的 `trace_id`；
 - Data、Patrol 和 Orchestrator 不持有写工具；
 - Action Agent 只允许两个草稿写工具；
+- 只读工具权限为 `ALLOW`，写工具强制为不可绕过的 `ASK`；
 - submit、cancel、delete 被列为禁止能力。
 
 ### 2.5 Agent 与 HITL
 
 - 建立 Orchestrator、Data、Action 和 Patrol Agent 构造边界与系统提示；
 - 建立保守的确定性意图门控；
+- 每次请求创建独立 Agent 与 Toolkit，不共享用户 access token 或会话状态；
+- Agent 运行前再次核对 Agent Session 用户与 MCP 当前用户；
+- Data/Patrol 已接入模型工具循环，Action 意图在聊天层停在持久化审批入口；
 - 建立持久化 Action 数据模型和状态枚举；
 - 实现规范化参数、SHA-256 参数摘要、审批 TTL 和幂等键；
 - 实现请求者本人查看、确认和拒绝审批；
@@ -79,42 +99,65 @@ ToolBase 运行时。
 - Agent 容器使用 UID 10001、只读文件系统、临时 `/tmp`、移除 Linux capabilities；
 - 编写 PostgreSQL、Redis、Agent 三服务 Compose；
 - 为数据库、Redis 和 Agent 配置健康检查与持久化数据卷。
+- Compose 和镜像健康检查同时验证 API readiness 与根路径聊天页面。
+
+### 2.7 消息持久化与模型记忆
+
+- 新增 `chat_conversations` 与 `chat_messages` PostgreSQL 表；
+- 会话按 ERPNext site、登录用户和 `model`/`agent` 模式隔离；
+- 每条消息保存 UUID、递增 sequence、角色、正文和 UTC 时间；
+- 新请求只接受当前消息和可选 `conversation_id`，不接受客户端提供的历史作为模型上下文；
+- 每轮调用前从数据库加载最近消息，受消息数与字符数双重预算限制；
+- 用户消息在模型调用前提交，助手消息在流式 `done` 事件前提交；
+- `GET /api/v1/chat/history` 支持页面刷新和模式切换后的历史恢复；
+- 新增 `GET/POST /api/v1/chat/conversations` 会话列表与创建接口；
+- 会话列表标题由首条用户消息安全派生，展示消息数与更新时间；
+- 页面分别保留模型模式与 ERPNext Agent 模式的会话 ID；
+- 左侧响应式历史栏支持新建、切换和移动端展开/收起；
+- 新增 `memory_smoke`，用随机码执行两轮真实模型调用并直接回查 PostgreSQL。
 
 ## 三、验证证据
 
 | 检查项 | 结果 |
 |---|---|
 | `uv.lock` 依赖解析 | 通过，锁定 AgentScope 2.0.5 |
-| Pytest | 21 项通过，包含环境变量到模型/Agent 的构造测试 |
+| Pytest | 35 项通过，包含数据库历史、标题生成、上下文裁剪和多会话前端契约测试 |
 | Ruff | 通过，无问题 |
-| Mypy strict | 通过，检查 46 个源码文件 |
+| Mypy strict | 通过，检查 63 个源码与测试文件 |
 | Docker Compose config | 通过 |
-| Docker 镜像构建 | 通过 |
-| PostgreSQL 初始化/建表 | 通过 |
+| Docker 镜像构建 | 通过，生成 `erpnext-agent:local` |
+| 真实模型请求 | 通过，容器实际收到回复“千问模型连接成功。” |
+| 页面访问 | `/`、CSS、JavaScript 均返回 HTTP 200 和正确 Content-Type |
+| 页面真实流式对话 | 通过受保护临时 Session 调用页面 SSE，模型回复“前端对话连接成功。” |
+| PostgreSQL 初始化/建表 | 通过，存在 `chat_conversations` 与 `chat_messages` |
+| 真实消息落库 | 通过，同一会话直接查询得到 4 条、角色顺序为 user/assistant/user/assistant |
+| 真实模型记忆 | 通过，第二次请求未携带历史正文，模型准确返回第一轮运行时随机码 |
+| 会话列表与新建 | 通过，列表返回 4 条消息计数，新建会话获得独立 UUID |
+| 前端静态资源 | Node 语法检查通过，运行中 HTML/CSS/JS 均包含新版多会话组件 |
 | Redis 连接 | 通过 |
-| Agent 容器启动 | 通过 |
-| `/health/ready` | PostgreSQL、Redis 均返回 `ok` |
+| Agent 容器启动 | 通过，Agent、PostgreSQL、Redis 均为 healthy |
+| `/health/ready` | Redis/Database 为 `ok`，`model_configured` 与 `agent_chat_runtime` 为 `true` |
 
-验证结束后已删除测试容器、测试网络和测试数据卷，没有遗留后台服务或测试数据。
+验证完成后保留最新 Compose 服务运行，便于继续 OAuth 和真实 ERPNext 联调。
 
 ## 四、尚未完成
 
-- 尚未实现保留 `structuredContent` 的 AgentScope 自定义 `ToolBase`；
-- 尚未实现完整的多轮消息存储、摘要和流式 SSE/WebSocket；
+- 尚未实现长会话自动摘要、会话重命名/删除 UI 和正式数据保留策略；
 - 尚未实现 access token 自动刷新、分布式 single-flight 和 MCP 401 后单次重试；
 - 尚未实现 EXECUTING Action 的重启恢复和后台核对任务；
-- 尚未使用两个真实 ERPNext 用户完成 OAuth、权限差分和跨用户隔离测试；
+- 只读 Agent 代码闭环已完成，但尚未使用真实 ERPNext OAuth Session 验证工具调用结果；
+- 尚未使用两个真实 ERPNext 用户完成权限差分和跨用户隔离测试；
 - 尚未建立 Alembic 等正式数据库迁移流程；
 - OpenTelemetry 当前只有接入边界，尚未配置正式 exporter 和 Trace；
 - 40 个评估场景目前只有目录骨架，尚未实现 Runner 与报告。
 
 ## 五、下一阶段建议
 
-1. 实现 ERPNext MCP 自定义 ToolBase，保留 structuredContent 和领域错误；
-2. 使用真实 OAuth 用户打通 Data Agent 的最小只读闭环；
-3. 将 `reply_stream()` 事件接入聊天 SSE API；
-4. 增加 Token 自动刷新、single-flight 和身份一致性故障测试；
-5. 实现聊天消息持久化与会话恢复；
+1. 使用真实 OAuth 用户验证 Data Agent 查询与 SSE 最小闭环；
+2. 使用第二个低权限用户验证权限差分和跨用户隔离；
+3. 增加 Token 自动刷新、single-flight 和 MCP 401 后单次重试；
+4. 把草稿预览接入持久化 Action 审批与执行入口；
+5. 在现有持久化消息基础上实现自动摘要、会话重命名/删除和数据保留策略；
 6. 增加正式数据库迁移和 Action 重启恢复流程；
 7. 开始构建第一批真实查询与安全评估场景。
 
@@ -127,5 +170,9 @@ ToolBase 运行时。
 - 实际执行的测试、静态检查和运行验证；
 - 仍未完成或无法验证的边界；
 - 推荐的下一步开发顺序。
+
+完成代码、测试和进度文档后，还必须创建 Git 提交并推送到当前远程分支；如果远程认证或
+网络异常导致推送失败，应保留本地提交并明确报告阻塞原因，不得把“仅本地提交”描述为已经
+同步到远程。
 
 未经过测试或真实运行验证的能力，不记录为“已经完成”。

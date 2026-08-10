@@ -32,6 +32,7 @@ async def create_schema(engine: AsyncEngine) -> None:
     # Imported here so SQLAlchemy sees every mapped table before create_all.
     from erpnext_agent.actions import models as action_models  # noqa: F401
     from erpnext_agent.auth import models as auth_models  # noqa: F401
+    from erpnext_agent.conversations import models as conversation_models  # noqa: F401
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -47,4 +48,3 @@ async def session_scope(
         except Exception:
             await session.rollback()
             raise
-

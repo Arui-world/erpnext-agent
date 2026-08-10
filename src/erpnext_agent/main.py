@@ -3,16 +3,20 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from erpnext_agent import __version__
 from erpnext_agent.agents.factory import ConfiguredAgentFactory
+from erpnext_agent.agents.runtime import AgentRuntimeFactory
 from erpnext_agent.api import approvals, auth, chat, health
 from erpnext_agent.auth.oauth_client import OAuthClient
 from erpnext_agent.auth.session_store import OAuthStateStore, SessionStore
@@ -24,6 +28,7 @@ from erpnext_agent.mcp.adapter import ERPNextMCPAdapter
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved = settings or get_settings()
+    web_root = Path(__file__).resolve().parent / "web"
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -56,8 +61,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             url=resolved.effective_mcp_url,
             http=http,
             verify_contract=resolved.mcp_verify_tool_contract,
+            host_header=resolved.erpnext_host_header,
         )
         app.state.agent_factory = ConfiguredAgentFactory(resolved)
+        app.state.agent_runtime_factory = AgentRuntimeFactory(
+            agent_factory=app.state.agent_factory,
+            adapter=app.state.mcp_adapter,
+        )
 
         if resolved.auto_create_schema:
             await create_schema(engine)
@@ -104,6 +114,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth.router, prefix=resolved.api_prefix)
     app.include_router(chat.router, prefix=resolved.api_prefix)
     app.include_router(approvals.router, prefix=resolved.api_prefix)
+
+    app.mount("/assets", StaticFiles(directory=web_root), name="web-assets")
+
+    @app.get("/", include_in_schema=False)
+    async def chat_ui() -> FileResponse:
+        return FileResponse(web_root / "index.html")
+
     return app
 
 

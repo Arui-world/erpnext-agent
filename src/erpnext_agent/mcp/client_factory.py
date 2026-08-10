@@ -21,7 +21,10 @@ def build_mcp_client(
         is_stateful=False,
         mcp_config=HttpMCPConfig(
             url=settings.effective_mcp_url,
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Host": settings.erpnext_host_header,
+            },
             timeout=settings.mcp_http_timeout_seconds,
         ),
         enable_tools=tools,
