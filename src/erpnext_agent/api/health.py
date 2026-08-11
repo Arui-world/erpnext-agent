@@ -39,7 +39,9 @@ async def ready(request: Request, response: Response) -> dict[str, Any]:
         "checks": checks,
         "capabilities": {
             "oauth": True,
+            "oauth_auto_refresh": True,
             "approval_persistence": True,
+            "conversation_auto_summary": request.app.state.settings.chat_summary_enabled,
             "model_configured": model_configuration_is_complete(request.app.state.settings),
             "agent_chat_runtime": model_configuration_is_complete(
                 request.app.state.settings

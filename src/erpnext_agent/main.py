@@ -20,8 +20,14 @@ from erpnext_agent.agents.runtime import AgentRuntimeFactory
 from erpnext_agent.api import approvals, auth, chat, health
 from erpnext_agent.auth.oauth_client import OAuthClient
 from erpnext_agent.auth.session_store import OAuthStateStore, SessionStore
+from erpnext_agent.auth.token_refresh import TokenRefreshService
 from erpnext_agent.auth.token_store import TokenStore
 from erpnext_agent.config import Settings, get_settings
+from erpnext_agent.conversations.memory import (
+    AgentSummaryGenerator,
+    ConversationMemoryPolicy,
+    ConversationMemoryService,
+)
 from erpnext_agent.db import create_engine, create_schema, create_session_factory
 from erpnext_agent.mcp.adapter import ERPNextMCPAdapter
 
@@ -57,6 +63,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             key_version=resolved.token_encryption_key_version,
             client_id=resolved.oauth_client_id,
         )
+        app.state.token_refresh_service = TokenRefreshService(
+            store=app.state.token_store,
+            oauth=app.state.oauth_client,
+            redis=redis,
+            leeway_seconds=resolved.oauth_refresh_leeway_seconds,
+            lock_ttl_seconds=resolved.oauth_refresh_lock_ttl_seconds,
+            wait_seconds=resolved.oauth_refresh_wait_seconds,
+            poll_seconds=resolved.oauth_refresh_poll_seconds,
+        )
         app.state.mcp_adapter = ERPNextMCPAdapter(
             url=resolved.effective_mcp_url,
             http=http,
@@ -64,6 +79,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             host_header=resolved.erpnext_host_header,
         )
         app.state.agent_factory = ConfiguredAgentFactory(resolved)
+        app.state.conversation_memory_service = ConversationMemoryService(
+            redis=redis,
+            generator=AgentSummaryGenerator(app.state.agent_factory),
+            policy=ConversationMemoryPolicy(
+                enabled=resolved.chat_summary_enabled,
+                trigger_messages=resolved.chat_summary_trigger_messages,
+                trigger_chars=resolved.chat_summary_trigger_chars,
+                keep_recent_messages=resolved.chat_summary_keep_recent_messages,
+                source_max_chars=resolved.chat_summary_source_max_chars,
+                summary_max_chars=resolved.chat_summary_max_chars,
+                lock_ttl_seconds=resolved.chat_summary_lock_ttl_seconds,
+            ),
+        )
         app.state.agent_runtime_factory = AgentRuntimeFactory(
             agent_factory=app.state.agent_factory,
             adapter=app.state.mcp_adapter,

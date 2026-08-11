@@ -225,8 +225,14 @@ GET  /.well-known/oauth-authorization-server
 
 - token 记录至少绑定 credential_id、ERP site、OAuth client、subject/user、scope、过期时间和密钥版本；
 - access token 和 refresh token 使用信封加密，日志、异常和 Trace 永不输出明文；
-- 同一凭据刷新使用分布式 single-flight lock，避免并发刷新相互覆盖；
-- MCP 返回 401/403 时只允许刷新一次；刷新失败则清除会话并要求重新登录；
+- 每次绑定 MCP 前检查过期时间，默认在到期前 120 秒主动刷新，而不是等待用户遇到 401；
+- 同一凭据刷新使用 Redis 分布式 single-flight lock，锁键只包含凭据 ID 哈希，租约释放必须校验
+  所有者，避免并发刷新相互覆盖；
+- 未获得锁的请求轮询持久化凭据的 token 和更新时间，复用胜出者的结果；只要原 token
+  仍未过期，等待超时不会立即迫使用户退出；
+- MCP 返回认证失败时只允许强制刷新一次并重建 per-user 调用边界；第二次仍失败则清除
+  Agent Session 并要求重新登录；
+- 刷新端点没有轮换 refresh token 时保留原值，不得将空值覆盖到加密凭据；
 - 登出先调用 revoke，再删除本地 token 与会话；revoke 暂时失败也要阻止本地继续使用并进入后台重试；
 - 恢复 Agent 状态时只读取 credential_id，重新构造 MCP Client，绝不序列化 token header。
 
@@ -511,6 +517,15 @@ Schema Registry 缓存 MCP tools/list、DocType 搜索/Schema 结果、本地指
 ### 9.1 会话恢复
 
 会话保存消息、摘要、当前只读任务和待审批 Action ID，不保存 access token、MCP Client、数据库连接或运行中的协程。
+
+长对话上下文采用“版本化摘要 + 最近原始消息”：
+
+- `chat_messages` 保留完整原始历史，摘要不删除、替换或改写审计记录；
+- 摘要信封保存 `version`、`through_sequence`、`content` 和 `updated_at`，并兼容旧的纯文本字段；
+- 默认在 16 条消息或 16000 字符时触发，摘要只覆盖以 assistant 结束的完整旧轮次，至少
+  保留最近 8 条原始消息；
+- 摘要 Agent 没有工具，历史内容只是待压缩数据，不能作为新的系统指令或授权依据；
+- 摘要使用 Redis 非阻塞 single-flight 和数据库序列号校验；生成失败时回滚并降级为最近消息，不中断对话。
 
 进程重启后：
 

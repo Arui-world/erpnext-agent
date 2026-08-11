@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -36,6 +37,13 @@ class ConversationSummary:
     message_count: int
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationMemory:
+    content: str
+    through_sequence: int
+    updated_at: datetime | None = None
 
 
 class ConversationRepository:
@@ -214,6 +222,59 @@ class ConversationRepository:
         records.reverse()
         return [_stored_message(record) for record in records]
 
+    async def list_messages_after(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: str,
+        after_sequence: int,
+    ) -> list[StoredMessage]:
+        records = list(
+            await session.scalars(
+                select(ChatMessageRecord)
+                .where(
+                    ChatMessageRecord.conversation_id == conversation_id,
+                    ChatMessageRecord.sequence > after_sequence,
+                )
+                .order_by(ChatMessageRecord.sequence)
+            )
+        )
+        return [_stored_message(record) for record in records]
+
+    async def get_memory(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: str,
+    ) -> ConversationMemory:
+        value = await session.scalar(
+            select(ConversationRecord.summary).where(
+                ConversationRecord.conversation_id == conversation_id
+            )
+        )
+        return decode_memory(value)
+
+    async def save_memory(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: str,
+        memory: ConversationMemory,
+    ) -> ConversationMemory:
+        conversation = await session.scalar(
+            select(ConversationRecord)
+            .where(ConversationRecord.conversation_id == conversation_id)
+            .with_for_update()
+        )
+        if conversation is None:
+            raise ConversationNotFoundError(conversation_id)
+        current = decode_memory(conversation.summary)
+        if current.through_sequence >= memory.through_sequence:
+            return current
+        conversation.summary = encode_memory(memory)
+        await session.flush()
+        return memory
+
     async def load_context(
         self,
         session: AsyncSession,
@@ -251,6 +312,49 @@ def conversation_title(content: str | None, *, max_length: int = 42) -> str:
     if len(normalized) <= max_length:
         return normalized
     return normalized[:max_length].rstrip() + "…"
+
+
+def encode_memory(memory: ConversationMemory) -> str:
+    updated_at = memory.updated_at or datetime.now(UTC)
+    return json.dumps(
+        {
+            "version": 1,
+            "through_sequence": memory.through_sequence,
+            "content": memory.content,
+            "updated_at": updated_at.isoformat(),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def decode_memory(value: str | None) -> ConversationMemory:
+    if not value:
+        return ConversationMemory(content="", through_sequence=0)
+    try:
+        payload = json.loads(value)
+    except ValueError:
+        return ConversationMemory(content=value, through_sequence=0)
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return ConversationMemory(content=value, through_sequence=0)
+    content = payload.get("content")
+    through_sequence = payload.get("through_sequence")
+    if not isinstance(content, str) or not isinstance(through_sequence, int):
+        return ConversationMemory(content=value, through_sequence=0)
+    raw_updated_at = payload.get("updated_at")
+    try:
+        updated_at = (
+            datetime.fromisoformat(raw_updated_at)
+            if isinstance(raw_updated_at, str)
+            else None
+        )
+    except ValueError:
+        updated_at = None
+    return ConversationMemory(
+        content=content,
+        through_sequence=max(through_sequence, 0),
+        updated_at=updated_at,
+    )
 
 
 def _stored_message(record: ChatMessageRecord) -> StoredMessage:

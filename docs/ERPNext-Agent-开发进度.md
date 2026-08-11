@@ -1,7 +1,7 @@
 # ERPNext Agent 开发进度
 
 > 最后更新：2026-08-11
-> 当前阶段：前端已支持安全的 Agent Markdown 预览渲染
+> 当前阶段：Token 自动刷新与长对话自动摘要已完成实现和自动化验证，待真实部署验收
 > 进度记录原则：每次开发任务完成后更新本文，记录实际完成内容、验证证据、遗留项和下一步。
 
 ## 一、当前状态
@@ -27,6 +27,12 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 `erpnext_get_stock_balance`；只提供物料时，Data Agent 单次调用
 `erpnext_get_item_stock_by_warehouses`，使用 MCP 返回的当前用户可见叶子仓库明细和数量合计回答。
 Chat API 不再使用库存问法正则、专用确定性服务或伪造工具事件截获该请求。
+
+OAuth 凭据使用前会在过期窗口内主动刷新，并使用 Redis 分布式 single-flight
+防止并发请求重复轮换 token；MCP 首次认证失败时只刷新并重试一次，无法恢复才清理
+Agent Session 并要求重新登录。长对话会把旧的完整轮次转换为版本化摘要，与最近消息一起作为
+模型上下文，PostgreSQL 中的原始消息不删除。两项能力已通过单元/并发/回归测试，运行中的
+Agent 容器尚未替换为新镜像，真实 token 轮换和真实模型摘要待明确授权后验收。
 
 ## 二、已经完成
 
@@ -152,14 +158,36 @@ Chat API 不再使用库存问法正则、专用确定性服务或伪造工具�
 - Markdown 仅用于助手消息，用户消息继续使用 `textContent`；
 - 流式增量和 PostgreSQL 历史恢复都通过同一 `renderMessage()` 预览渲染。
 
+### 2.10 OAuth Token 自动刷新
+
+- 读取凭据时在默认 120 秒过期窗口内主动使用 refresh token 刷新 access token；
+- 使用经哈希的凭据 ID 构造 Redis 锁键，通过带所有者校验的分布式租约实现
+  single-flight；
+- 等待中的并发请求会重读 PostgreSQL 凭据并复用已刷新 token，不重复调用 OAuth 端点；
+- ERPNext 不返回新 refresh token 时保留旧值，新 access token 继续加密存储；
+- MCP 首次返回认证失败时强制刷新并重建调用边界，最多重试一次；
+- refresh token 缺失/失效或第二次认证失败时清理 Agent Session，向客户端返回稳定的
+  `REAUTHENTICATION_REQUIRED`，不泄露 token。
+
+### 2.11 长对话自动摘要
+
+- 会话达到默认 16 条消息或 16000 字符时触发摘要，保留最近 8 条消息；
+- 只摘要以 assistant 消息结束的完整旧轮次，不切断正在进行的 user/assistant 上下文；
+- `chat_conversations.summary` 保存包含版本、`through_sequence`、摘要和更新时间的 JSON
+  信封，并向后兼容原有纯文本摘要；
+- 增量摘要通过 Redis 租约防止并发覆盖，数据库写入再校验序列号，拒绝过时结果；
+- 摘要 Agent 不持有 Toolkit，提示词要求把历史内容视为数据，不允许其扩大权限或注入新指令；
+- 模型调用时使用“系统生成摘要 + 最近消息”，原始 `chat_messages` 完整保留；
+- 摘要生成失败时回滚并降级为最近消息，不阻断当前对话。
+
 ## 三、验证证据
 
 | 检查项 | 结果 |
 |---|---|
 | `uv.lock` 依赖解析 | 通过，锁定 AgentScope 2.0.5 |
-| Pytest | 41 项通过，包含新工具白名单和 Data Agent 库存决策规则 |
+| Pytest | 61 项通过，包含 Token 刷新并发/失败路径、MCP 单次重试和摘要增量/降级/预算路径 |
 | Ruff | 通过，无问题 |
-| Mypy strict | 通过，检查 57 个源码文件 |
+| Mypy strict | 通过，检查 63 个源码文件 |
 | Docker Compose config | 通过 |
 | Docker 镜像构建 | 通过，生成 `erpnext-agent:local` |
 | 真实模型请求 | 通过，容器实际收到回复“千问模型连接成功。” |
@@ -183,13 +211,17 @@ Chat API 不再使用库存问法正则、专用确定性服务或伪造工具�
 | Redis 连接 | 通过 |
 | Agent 容器启动 | 通过，Agent、PostgreSQL、Redis 均为 healthy |
 | `/health/ready` | Redis/Database 为 `ok`，`model_configured` 与 `agent_chat_runtime` 为 `true` |
+| Token 自动刷新真实验收 | 待授权；验收会实际轮换 Administrator OAuth token |
+| 长对话真实摘要验收 | 待授权；验收会调用一次真实模型并使用临时会话数据 |
 
-验证完成后保留最新 Compose 服务运行，便于继续 OAuth 和真实 ERPNext 联调。
+当前 Compose 服务仍运行上一版本；为避免未经明确授权就重启对外服务、消耗真实模型配额或轮换
+Administrator token，本阶段先以自动化测试和可重复 smoke 脚本作为代码验收证据。
 
 ## 四、尚未完成
 
-- 尚未实现长会话自动摘要、会话重命名/删除 UI 和正式数据保留策略；
-- 尚未实现 access token 自动刷新、分布式 single-flight 和 MCP 401 后单次重试；
+- Token 自动刷新已实现但尚未在真实 Administrator 凭据上执行轮换 smoke；
+- 长会话自动摘要已实现但尚未在运行容器中调用真实模型验收；
+- 尚未实现会话重命名/删除 UI 和正式数据保留策略；
 - 尚未实现 EXECUTING Action 的重启恢复和后台核对任务；
 - 尚未使用两个真实 ERPNext 用户完成权限差分和跨用户隔离测试；
 - 尚未建立 Alembic 等正式数据库迁移流程；
@@ -199,10 +231,10 @@ Chat API 不再使用库存问法正则、专用确定性服务或伪造工具�
 
 ## 五、下一阶段建议
 
-1. 使用第二个低权限用户验证权限差分和跨用户隔离；
-2. 增加 Token 自动刷新、single-flight 和 MCP 401 后单次重试；
+1. 经明确授权后重建并重启 Agent，执行真实 token 轮换、真实模型摘要和库存回归 smoke；
+2. 使用第二个低权限用户验证权限差分和跨用户隔离；
 3. 把草稿预览接入持久化 Action 审批与执行入口；
-4. 在现有持久化消息基础上实现自动摘要、会话重命名/删除和数据保留策略；
+4. 实现会话重命名/删除和正式数据保留策略；
 5. 增加正式数据库迁移和 Action 重启恢复流程；
 6. 将单仓与多仓真实库存查询纳入可重复的集成测试 Runner，并开始构建安全评估场景。
 

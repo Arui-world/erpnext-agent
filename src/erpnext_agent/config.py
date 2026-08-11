@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     oauth_redirect_uri: str
     oauth_scope: str = "all openid"
     oauth_state_ttl_seconds: int = Field(default=600, ge=60, le=1800)
+    oauth_refresh_leeway_seconds: int = Field(default=120, ge=0, le=3600)
+    oauth_refresh_lock_ttl_seconds: int = Field(default=60, ge=10, le=300)
+    oauth_refresh_wait_seconds: float = Field(default=25.0, gt=0, le=120)
+    oauth_refresh_poll_seconds: float = Field(default=0.1, gt=0, le=2)
 
     session_cookie_name: str = "erpnext_agent_session"
     session_cookie_secure: bool = False
@@ -70,6 +74,13 @@ class Settings(BaseSettings):
     chat_history_max_chars: int = Field(default=24_000, ge=4_000, le=100_000)
     chat_history_display_limit: int = Field(default=100, ge=10, le=500)
     chat_conversation_list_limit: int = Field(default=50, ge=10, le=200)
+    chat_summary_enabled: bool = True
+    chat_summary_trigger_messages: int = Field(default=16, ge=4, le=200)
+    chat_summary_trigger_chars: int = Field(default=16_000, ge=2_000, le=100_000)
+    chat_summary_keep_recent_messages: int = Field(default=8, ge=2, le=100)
+    chat_summary_source_max_chars: int = Field(default=24_000, ge=4_000, le=100_000)
+    chat_summary_max_chars: int = Field(default=4_000, ge=500, le=20_000)
+    chat_summary_lock_ttl_seconds: int = Field(default=120, ge=30, le=600)
 
     model_provider: Literal["dashscope", "openai", "openai_compatible"] = "openai_compatible"
     model_name: str = ""
@@ -119,6 +130,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_environment_safety(self) -> Settings:
+        if self.chat_summary_keep_recent_messages >= self.chat_summary_trigger_messages:
+            raise ValueError(
+                "CHAT_SUMMARY_KEEP_RECENT_MESSAGES must be less than "
+                "CHAT_SUMMARY_TRIGGER_MESSAGES"
+            )
         if self.session_cookie_samesite == "none" and not self.session_cookie_secure:
             raise ValueError("SameSite=None requires SESSION_COOKIE_SECURE=true")
         if self.app_env == "production":

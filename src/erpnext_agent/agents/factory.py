@@ -14,6 +14,7 @@ from erpnext_agent.agents.prompts import (
     MODEL_CHAT_SYSTEM_PROMPT,
     ORCHESTRATOR_SYSTEM_PROMPT,
     PATROL_SYSTEM_PROMPT,
+    SUMMARY_SYSTEM_PROMPT,
 )
 from erpnext_agent.config import Settings
 
@@ -65,6 +66,18 @@ class ConfiguredAgentFactory:
         return Agent(
             name="model_assistant",
             system_prompt=MODEL_CHAT_SYSTEM_PROMPT,
+            model=self.model,
+            toolkit=Toolkit(),
+            model_config=ModelConfig(max_retries=self._settings.model_max_retries),
+            react_config=ReActConfig(max_iters=2, stop_on_reject=True),
+        )
+
+    def build_summary_agent(self) -> Agent:
+        """Create a tool-free agent that only compresses persisted conversation memory."""
+
+        return Agent(
+            name="conversation_summarizer",
+            system_prompt=SUMMARY_SYSTEM_PROMPT,
             model=self.model,
             toolkit=Toolkit(),
             model_config=ModelConfig(max_retries=self._settings.model_max_retries),

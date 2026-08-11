@@ -30,6 +30,7 @@ class StoredCredential:
     refresh_token: str | None
     scope: str
     expires_at: datetime | None
+    updated_at: datetime
     revoked_at: datetime | None
 
 
@@ -84,7 +85,11 @@ class TokenStore:
         return record.credential_id
 
     async def get(self, session: AsyncSession, credential_id: str) -> StoredCredential:
-        record = await session.get(OAuthCredentialRecord, credential_id)
+        record = await session.scalar(
+            select(OAuthCredentialRecord)
+            .where(OAuthCredentialRecord.credential_id == credential_id)
+            .execution_options(populate_existing=True)
+        )
         if record is None:
             raise CredentialNotFoundError(credential_id)
         return StoredCredential(
@@ -100,6 +105,7 @@ class TokenStore:
             ),
             scope=record.scope,
             expires_at=record.expires_at,
+            updated_at=record.updated_at,
             revoked_at=record.revoked_at,
         )
 
@@ -119,4 +125,3 @@ class TokenStore:
             return self._fernet.decrypt(value.encode()).decode()
         except InvalidToken as exc:
             raise CredentialDecryptError("Unable to decrypt the stored OAuth credential") from exc
-

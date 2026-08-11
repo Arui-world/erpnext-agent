@@ -227,6 +227,8 @@ class ERPNextMCPAdapter:
                 "Unable to initialize ERPNext MCP",
                 code="MCP_UNAVAILABLE",
             ) from exc
+        if response.status_code in {401, 403}:
+            raise MCPTransportError("ERPNext authentication failed", code="MCP_AUTH_FAILED")
         if response.status_code not in {200, 202, 204}:
             raise MCPTransportError(
                 "ERPNext MCP rejected initialization",

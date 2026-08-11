@@ -1,12 +1,16 @@
+import json
 from typing import Any
 
+import httpx
 import pytest
 
 from erpnext_agent.mcp.adapter import (
+    ERPNextMCPAdapter,
     MCPBusinessError,
     MCPContractError,
     MCPProtocolError,
     MCPToolError,
+    MCPTransportError,
     normalize_tool_response,
 )
 
@@ -63,3 +67,25 @@ def test_all_protocol_layers_fail_closed(
 ) -> None:
     with pytest.raises(error_type):
         normalize_tool_response(payload)
+
+
+@pytest.mark.asyncio
+async def test_initialize_notification_maps_auth_failure_for_refresh_retry() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        if payload.get("method") == "initialize":
+            return httpx.Response(
+                200,
+                json={"jsonrpc": "2.0", "id": 1, "result": {}},
+            )
+        return httpx.Response(401)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        adapter = ERPNextMCPAdapter(
+            url="http://mcp.local/mcp",
+            http=http,
+            verify_contract=False,
+        )
+        with pytest.raises(MCPTransportError) as raised:
+            await adapter.initialize("expired")  # noqa: S106 - inert test credential
+    assert raised.value.code == "MCP_AUTH_FAILED"

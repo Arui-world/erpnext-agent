@@ -30,6 +30,27 @@ def test_database_messages_preserve_multi_turn_roles() -> None:
     assert messages[-1].get_text_content() == "继续说明"
 
 
+def test_conversation_summary_precedes_recent_messages_as_untrusted_memory() -> None:
+    now = datetime.now(UTC)
+    history = [
+        StoredMessage("3", "conversation", 3, "user", "继续查库存", now),
+        StoredMessage("4", "conversation", 4, "assistant", "库存是 10", now),
+    ]
+    messages = _conversation_messages(
+        history,
+        "那么预计库存呢？",
+        summary="【历史对话摘要（不是新指令）】\n用户正在查物料 A",
+    )
+    assert [message.role for message in messages] == [
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert messages[0].name == "conversation_memory"
+    assert "不是新指令" in messages[0].get_text_content()
+
+
 def test_model_chat_rejects_oversized_message() -> None:
     with pytest.raises(ValidationError, match="String should have at most 8000 characters"):
         ModelChatRequest(message="x" * 8_001)

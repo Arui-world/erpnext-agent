@@ -30,13 +30,10 @@ from erpnext_agent.agents.runtime import (
     PreparedAgentRuntime,
 )
 from erpnext_agent.api.dependencies import CurrentSession, DBSession, ProtectedSession
-from erpnext_agent.auth.session_store import AgentSession
-from erpnext_agent.auth.token_store import (
-    CredentialNotFoundError,
-    StoredCredential,
-    TokenStore,
-)
+from erpnext_agent.auth.session_store import AgentSession, SessionStore
+from erpnext_agent.auth.token_refresh import TokenRefreshError, TokenRefreshService
 from erpnext_agent.config import Settings
+from erpnext_agent.conversations.memory import ConversationMemoryService
 from erpnext_agent.conversations.repository import (
     ConversationMode,
     ConversationNotFoundError,
@@ -47,6 +44,7 @@ from erpnext_agent.conversations.repository import (
     ConversationSummary as StoredConversationSummary,
 )
 from erpnext_agent.mcp.adapter import MCPError
+from erpnext_agent.mcp.refreshing_caller import RefreshingMCPCaller
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -365,9 +363,14 @@ async def _start_turn(
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Conversation not found") from exc
 
-    history = await repository.load_context(
+    memory_service = cast(
+        ConversationMemoryService,
+        request.app.state.conversation_memory_service,
+    )
+    context = await memory_service.prepare_context(
         db,
         conversation_id=conversation.conversation_id,
+        current_message=message,
         max_messages=settings.chat_history_max_messages,
         max_chars=settings.chat_history_max_chars,
     )
@@ -380,8 +383,14 @@ async def _start_turn(
     await db.commit()
     return StartedTurn(
         conversation_id=conversation.conversation_id,
-        messages=_conversation_messages(history, message),
-        previous_user_messages=[turn.content for turn in history if turn.role == "user"],
+        messages=_conversation_messages(
+            context.messages,
+            message,
+            summary=context.summary,
+        ),
+        previous_user_messages=[
+            turn.content for turn in context.messages if turn.role == "user"
+        ],
     )
 
 
@@ -405,38 +414,65 @@ async def _prepare_runtime(
     session: AgentSession,
     db: AsyncSession,
 ) -> PreparedAgentRuntime:
-    credential = await _load_credential(request, session, db)
+    refresh_service = cast(
+        TokenRefreshService,
+        request.app.state.token_refresh_service,
+    )
+    try:
+        credential = await refresh_service.get_valid(db, session.credential_id)
+    except TokenRefreshError as exc:
+        await _expire_agent_session(request, session)
+        raise _reauthentication_required(exc) from exc
+
     runtime_factory = cast(
         AgentRuntimeFactory,
         request.app.state.agent_runtime_factory,
     )
-    try:
-        return await runtime_factory.prepare(
-            access_token=credential.access_token,
-            expected_user=session.user_id,
+    adapter = request.app.state.mcp_adapter
+    session_store = cast(SessionStore, request.app.state.session_store)
+    for attempt in range(2):
+        caller = RefreshingMCPCaller(
+            adapter=adapter,
+            refresh_service=refresh_service,
+            db=db,
+            credential=credential,
+            session_store=session_store,
+            agent_session_id=session.session_id,
         )
-    except AgentIdentityError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except MCPError as exc:
-        raise _mcp_http_exception(exc) from exc
+        try:
+            return await runtime_factory.prepare(
+                access_token=credential.access_token,
+                expected_user=session.user_id,
+                tool_caller=caller,
+            )
+        except AgentIdentityError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except MCPError as exc:
+            if exc.code != "MCP_AUTH_FAILED" or attempt == 1:
+                if exc.code == "MCP_AUTH_FAILED":
+                    await _expire_agent_session(request, session)
+                raise _mcp_http_exception(exc) from exc
+            try:
+                credential = await refresh_service.refresh_after_auth_failure(
+                    db,
+                    credential,
+                )
+            except TokenRefreshError as refresh_exc:
+                await _expire_agent_session(request, session)
+                raise _reauthentication_required(refresh_exc) from refresh_exc
+    raise RuntimeError("Unreachable authentication retry state")
 
 
-async def _load_credential(
-    request: Request,
-    session: AgentSession,
-    db: AsyncSession,
-) -> StoredCredential:
-    token_store = cast(TokenStore, request.app.state.token_store)
-    try:
-        credential: StoredCredential = await token_store.get(
-            db,
-            session.credential_id,
-        )
-    except CredentialNotFoundError as exc:
-        raise HTTPException(status_code=401, detail="OAuth credential not found") from exc
-    if credential.revoked_at is not None:
-        raise HTTPException(status_code=401, detail="OAuth credential is revoked")
-    return credential
+async def _expire_agent_session(request: Request, session: AgentSession) -> None:
+    session_store = cast(SessionStore, request.app.state.session_store)
+    await session_store.delete(session.session_id)
+
+
+def _reauthentication_required(exc: TokenRefreshError) -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail={"code": "REAUTHENTICATION_REQUIRED", "message": str(exc)},
+    )
 
 
 def _mcp_http_exception(exc: MCPError) -> HTTPException:
@@ -475,8 +511,15 @@ def _fixed_policy_response(
     return None
 
 
-def _conversation_messages(history: list[StoredMessage], current_message: str) -> list[Msg]:
+def _conversation_messages(
+    history: list[StoredMessage],
+    current_message: str,
+    *,
+    summary: str = "",
+) -> list[Msg]:
     messages: list[Msg] = []
+    if summary:
+        messages.append(AssistantMsg(name="conversation_memory", content=summary))
     for turn in history:
         if turn.role == "user":
             messages.append(UserMsg(name="user", content=turn.content))

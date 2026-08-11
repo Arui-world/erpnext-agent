@@ -8,6 +8,7 @@ from agentscope.agent import Agent
 from erpnext_agent.agents.factory import AgentBundle, ConfiguredAgentFactory
 from erpnext_agent.agents.orchestrator import Intent
 from erpnext_agent.mcp.adapter import ERPNextMCPAdapter
+from erpnext_agent.mcp.tool_bridge import MCPToolCaller
 from erpnext_agent.mcp.toolkit_factory import ERPNextToolkitFactory
 
 
@@ -48,6 +49,7 @@ class AgentRuntimeFactory:
         *,
         access_token: str,
         expected_user: str,
+        tool_caller: MCPToolCaller | None = None,
     ) -> PreparedAgentRuntime:
         specs = await self._adapter.discover_tools(access_token)
         current_user = await self._adapter.current_user(
@@ -60,6 +62,7 @@ class AgentRuntimeFactory:
         toolkits = self._toolkit_factory.build_from_specs(
             specs=specs,
             access_token=access_token,
+            caller=tool_caller,
         )
         bundle = self._agent_factory.build(
             orchestrator_toolkit=toolkits.orchestrator,

@@ -12,7 +12,7 @@ from erpnext_agent.mcp.policy import (
     ORCHESTRATOR_TOOLS,
     PATROL_AGENT_TOOLS,
 )
-from erpnext_agent.mcp.tool_bridge import ERPNextMCPTool, validate_tool_spec
+from erpnext_agent.mcp.tool_bridge import ERPNextMCPTool, MCPToolCaller, validate_tool_spec
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +36,7 @@ class ERPNextToolkitFactory:
         *,
         specs: list[dict[str, Any]],
         access_token: str,
+        caller: MCPToolCaller | None = None,
     ) -> AgentToolkits:
         by_name: dict[str, dict[str, Any]] = {}
         for spec in specs:
@@ -52,7 +53,7 @@ class ERPNextToolkitFactory:
                 tools=[
                     ERPNextMCPTool(
                         spec=by_name[name],
-                        adapter=self._adapter,
+                        adapter=caller or self._adapter,
                         access_token=access_token,
                     )
                     for name in sorted(allowed)

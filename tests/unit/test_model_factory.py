@@ -90,3 +90,17 @@ def test_configured_factory_applies_environment_to_all_agents(
     assert bundle.data_agent.model is bundle.action_agent.model
     assert bundle.data_agent.model_config.max_retries == 2
     assert bundle.orchestrator.name == "orchestrator"
+    summary_agent = ConfiguredAgentFactory(settings).build_summary_agent()
+    assert summary_agent.name == "conversation_summarizer"
+    assert summary_agent.model_config.max_retries == 2
+
+
+def test_invalid_summary_message_window_fails_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="CHAT_SUMMARY_KEEP_RECENT_MESSAGES"):
+        settings_from_environment(
+            monkeypatch,
+            CHAT_SUMMARY_TRIGGER_MESSAGES="8",
+            CHAT_SUMMARY_KEEP_RECENT_MESSAGES="8",
+        )

@@ -101,3 +101,24 @@ async def test_fetch_logged_user_returns_canonical_frappe_user() -> None:
     )
     assert captured[0].headers["host"] == "dev.localhost:8000"
     assert captured[0].headers["authorization"] == "Bearer test-access-token"
+
+
+@pytest.mark.asyncio
+async def test_refresh_uses_refresh_token_grant_without_exposing_it_in_url() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={"access_token": "rotated-access", "expires_in": 3600},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        token = await OAuthClient(oauth_settings(), http).refresh("refresh-secret")
+
+    form = parse_qs(captured[0].content.decode())
+    assert form["grant_type"] == ["refresh_token"]
+    assert form["refresh_token"] == ["refresh-secret"]  # noqa: S105
+    assert "refresh-secret" not in str(captured[0].url)
+    assert token.access_token == "rotated-access"  # noqa: S105
