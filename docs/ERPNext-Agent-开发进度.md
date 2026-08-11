@@ -1,7 +1,7 @@
 # ERPNext Agent 开发进度
 
 > 最后更新：2026-08-11
-> 当前阶段：Token 自动刷新与长对话自动摘要已部署，待真实 token/模型 smoke 验收
+> 当前阶段：Token 自动刷新与长对话自动摘要已完成部署和真实验收
 > 进度记录原则：每次开发任务完成后更新本文，记录实际完成内容、验证证据、遗留项和下一步。
 
 ## 一、当前状态
@@ -32,7 +32,7 @@ OAuth 凭据使用前会在过期窗口内主动刷新，并使用 Redis 分布�
 防止并发请求重复轮换 token；MCP 首次认证失败时只刷新并重试一次，无法恢复才清理
 Agent Session 并要求重新登录。长对话会把旧的完整轮次转换为版本化摘要，与最近消息一起作为
 模型上下文，PostgreSQL 中的原始消息不删除。两项能力已通过单元/并发/回归测试，并已重启
-Agent 容器部署新镜像。真实 token 轮换和真实模型摘要仍待分别授权后验收。
+Agent 容器部署新镜像。Administrator token 真实轮换和单次真实模型摘要 smoke 均已通过。
 
 ## 二、已经完成
 
@@ -211,16 +211,14 @@ Agent 容器部署新镜像。真实 token 轮换和真实模型摘要仍待分�
 | Redis 连接 | 通过 |
 | Agent 容器启动 | 通过，2026-08-11 重新创建后 Agent、PostgreSQL、Redis 均为 healthy |
 | `/health/ready` | Redis/Database 为 `ok`，并返回 `oauth_auto_refresh=true`、`conversation_auto_summary=true` |
-| Token 自动刷新真实验收 | 待授权；验收会实际轮换 Administrator OAuth token |
-| 长对话真实摘要验收 | 待授权；smoke 已限制为严格 1 次真实模型调用，临时会话结束后删除 |
+| Token 自动刷新真实验收 | 通过；Administrator OAuth token 成功轮换，credential ID 不变、版本前进，新 token 的 MCP 用户仍为 Administrator |
+| 长对话真实摘要验收 | 通过；严格 1 次真实模型调用，摘要覆盖 sequence 1–8、保留 9–12 且 12 条原始消息未减少 |
 
-当前 Compose 服务已根据用户对“允许重启”的明确授权替换为新镜像。本次重启没有调用真实模型，
-也没有主动轮换 Administrator token；这两项真实 smoke 仍保持待授权状态。
+当前 Compose 服务已运行新版本，Agent、PostgreSQL 和 Redis 均为 healthy。真实 smoke 后
+`/health/ready` 仍为 ready，刷新和摘要能力标记均为 `true`。
 
 ## 四、尚未完成
 
-- Token 自动刷新已实现但尚未在真实 Administrator 凭据上执行轮换 smoke；
-- 长会话自动摘要已实现但尚未在运行容器中调用真实模型验收；
 - 尚未实现会话重命名/删除 UI 和正式数据保留策略；
 - 尚未实现 EXECUTING Action 的重启恢复和后台核对任务；
 - 尚未使用两个真实 ERPNext 用户完成权限差分和跨用户隔离测试；
@@ -231,12 +229,11 @@ Agent 容器部署新镜像。真实 token 轮换和真实模型摘要仍待分�
 
 ## 五、下一阶段建议
 
-1. 经分别明确授权后执行真实 token 轮换、真实模型摘要和库存回归 smoke；
-2. 使用第二个低权限用户验证权限差分和跨用户隔离；
-3. 把草稿预览接入持久化 Action 审批与执行入口；
-4. 实现会话重命名/删除和正式数据保留策略；
-5. 增加正式数据库迁移和 Action 重启恢复流程；
-6. 将单仓与多仓真实库存查询纳入可重复的集成测试 Runner，并开始构建安全评估场景。
+1. 使用第二个低权限用户验证权限差分和跨用户隔离；
+2. 把草稿预览接入持久化 Action 审批与执行入口；
+3. 实现会话重命名/删除和正式数据保留策略；
+4. 增加正式数据库迁移和 Action 重启恢复流程；
+5. 将单仓与多仓真实库存查询纳入可重复的集成测试 Runner，并开始构建安全评估场景。
 
 ## 六、进度文档维护约定
 
