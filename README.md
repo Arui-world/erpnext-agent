@@ -119,7 +119,7 @@ GET http://localhost:8001/api/v1/auth/login
 | OAuth | `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URI`, `OAUTH_REFRESH_*` | 每环境独立 OAuth Client 与刷新策略 |
 | 会话 | `SESSION_SECRET`, `SESSION_COOKIE_*`, `SESSION_TTL_SECONDS` | Agent 浏览器会话 |
 | 加密 | `TOKEN_ENCRYPTION_KEY`, `TOKEN_ENCRYPTION_KEY_VERSION` | OAuth token 信封加密入口 |
-| Action | `ACTION_TTL_SECONDS`, `ACTION_RECOVERY_*`, `ACTION_EXECUTION_LOCK_TTL_SECONDS` | 审批期限、后台恢复频率与跨实例执行互斥 |
+| Action | `ACTION_TTL_SECONDS`, `ACTION_RECOVERY_*`, `ACTION_EXECUTION_LOCK_TTL_SECONDS`, `ACTION_HISTORY_LIMIT` | 审批期限、后台恢复、执行互斥与会话卡片恢复数量 |
 | 模型 | `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_API_KEY`, `MODEL_BASE_URL` | AgentScope Model Factory |
 | 记忆 | `CHAT_HISTORY_*`, `CHAT_SUMMARY_*` | 模型上下文、页面历史和自动摘要策略 |
 | 观测 | `OTEL_*` | 下一阶段 OpenTelemetry exporter |
@@ -142,6 +142,7 @@ GET http://localhost:8001/api/v1/auth/login
 | `POST /api/v1/chat/conversations` | 创建独立新会话，要求 Session 与 CSRF |
 | `GET /`、`GET /assets/*` | 聊天页面与静态资源 |
 | `GET /api/v1/approvals/{id}` | 已实现本人可见约束 |
+| `GET /api/v1/approvals?conversation_id={id}` | 恢复当前用户、站点和会话的审批卡片及最新状态 |
 | `POST /api/v1/approvals/{id}/decision` | 已实现本人确认/拒绝与状态锁 |
 | `POST /api/v1/approvals/{id}/execute` | 已接入本人批准、CAS、分布式执行锁、固定幂等键和草稿回读 |
 
@@ -149,6 +150,9 @@ GET http://localhost:8001/api/v1/auth/login
 Action 级 Redis 锁与冷却窗口避免跨实例并发重放，重新加载 Action 所有者的加密 OAuth 凭据、
 核验 MCP 当前用户后，才使用原参数和原 `idempotency_key` 核对/重试。身份或凭据无法确认时
 Action 保持 `EXECUTING` 并记录诊断信息，等待重新登录或人工重试，不会生成新幂等键。
+Agent 对话历史加载时会同时读取该会话的 Action 记录，把审批卡片重新挂载到包含对应 Action ID
+的助手消息；若流式连接在助手消息落库前中断，则追加一张本地恢复卡片。页面会短轮询仍处于
+`EXECUTING` 的记录，直到恢复 Worker 写入终态。
 
 模型配置示例：
 

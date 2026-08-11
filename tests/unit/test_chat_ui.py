@@ -66,6 +66,8 @@ def test_chat_ui_contains_required_layout_and_local_assets() -> None:
     assert 'id="composer"' in html
     assert 'href="/assets/styles.css"' in html
     assert 'src="/assets/markdown.js"' in html
+    assert 'src="/assets/action_restore.js"' in html
+    assert html.index("/assets/action_restore.js") < html.index("/assets/app.js")
     assert ".message-row.user" in css
     assert ".markdown-table-wrap" in css
     assert ".markdown-body table" in css
@@ -85,6 +87,10 @@ def test_chat_ui_contains_required_layout_and_local_assets() -> None:
     assert 'case "action_required"' in javascript
     assert "/decision" in javascript
     assert "/execute" in javascript
+    assert "/approvals?" in javascript
+    assert "fetchConversationActions" in javascript
+    assert "scheduleActionPolling" in javascript
+    assert "ActionRestore.attachActionsToMessages" in javascript
     assert "SafeMarkdown.renderMarkdown" in javascript
     assert "bubble.innerHTML" not in javascript
     assert "documentRef.createTextNode" in markdown

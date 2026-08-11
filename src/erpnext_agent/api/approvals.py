@@ -2,20 +2,22 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, cast
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from erpnext_agent.actions.coordination import acquire_action_execution_lease
 from erpnext_agent.actions.executor import ActionExecutor
 from erpnext_agent.actions.gateway import ActionGateway
-from erpnext_agent.actions.models import ActionStatus
+from erpnext_agent.actions.models import ActionRecord, ActionStatus
 from erpnext_agent.actions.repository import ActionNotFoundError, ActionRepository, ActionStateError
 from erpnext_agent.api.dependencies import CurrentSession, DBSession, ProtectedSession
 from erpnext_agent.auth.session_store import SessionStore
 from erpnext_agent.auth.token_refresh import TokenRefreshError, TokenRefreshService
+from erpnext_agent.config import Settings
 from erpnext_agent.mcp.adapter import MCPBusinessError, MCPContractError, MCPError
 from erpnext_agent.mcp.refreshing_caller import RefreshingMCPCaller
 
@@ -42,7 +44,11 @@ class ActionView(BaseModel):
     failure_message: str | None
 
 
-def _view(record: Any) -> ActionView:
+class ActionListResponse(BaseModel):
+    actions: list[ActionView]
+
+
+def _view(record: ActionRecord) -> ActionView:
     return ActionView(
         action_id=record.action_id,
         tool_name=record.tool_name,
@@ -58,6 +64,30 @@ def _view(record: Any) -> ActionView:
         failure_code=record.failure_code,
         failure_message=record.failure_message,
     )
+
+
+@router.get("", response_model=ActionListResponse)
+async def list_conversation_actions(
+    request: Request,
+    session: CurrentSession,
+    db: DBSession,
+    conversation_id: Annotated[UUID, Query()],
+) -> ActionListResponse:
+    repository = ActionRepository()
+    settings = cast(Settings, request.app.state.settings)
+    records = await repository.list_for_conversation(
+        db,
+        site=session.site,
+        user_id=session.user_id,
+        conversation_id=str(conversation_id),
+        limit=settings.action_history_limit,
+    )
+    changed = False
+    for record in records:
+        changed = repository.expire_if_needed(record) or changed
+    if changed:
+        await db.commit()
+    return ActionListResponse(actions=[_view(record) for record in records])
 
 
 @router.get("/{action_id}", response_model=ActionView)
@@ -234,7 +264,7 @@ async def execute_action(
 
 async def _validate_executable_action(
     repository: ActionRepository,
-    record: Any,
+    record: ActionRecord,
     user_id: str,
     db: AsyncSession,
 ) -> None:

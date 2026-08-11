@@ -35,6 +35,7 @@ const state = {
   messages: [],
   conversationIds: { model: null, agent: null },
   conversations: { model: [], agent: [] },
+  actionPollTimer: null,
 };
 
 const elements = {
@@ -88,6 +89,7 @@ function setAuthenticated(session) {
 }
 
 function setUnauthenticated() {
+  clearActionPolling();
   state.csrfToken = null;
   state.user = null;
   state.site = null;
@@ -346,6 +348,7 @@ async function executeAction(message) {
   } catch (error) {
     const detail = error instanceof Error ? error.message : "草稿执行失败";
     updateMessage(message, { actionBusy: false, toolState: detail });
+    void refreshConversationActions(state.conversationIds.agent);
     return null;
   }
 }
@@ -369,19 +372,33 @@ function scrollToBottom() {
   });
 }
 
-function showConversationMessages(messages = []) {
+function restoredActionMessage(action) {
+  return `已从持久化记录恢复 Action ${action.action_id}，当前状态：${actionStatusLabel(action.status)}。`;
+}
+
+function showConversationMessages(messages = [], actions = []) {
+  clearActionPolling();
   state.messages = [];
   elements.conversationInner.replaceChildren();
+  const restored = window.ActionRestore.attachActionsToMessages(messages, actions);
   if (!messages.length) {
     createMessage("assistant", MODES[state.mode].welcome, { persisted: false });
   } else {
-    for (const message of messages) {
-      createMessage(message.role, message.content);
+    for (const message of restored.messages) {
+      createMessage(message.role, message.content, { action: message.action });
     }
   }
+  for (const action of restored.unmatchedActions) {
+    createMessage("assistant", restoredActionMessage(action), {
+      action,
+      persisted: false,
+    });
+  }
+  scheduleActionPolling(state.conversationIds.agent, actions);
 }
 
 function resetConversation() {
+  clearActionPolling();
   showConversationMessages();
   renderSuggestions();
   elements.modeHint.textContent = MODES[state.mode].hint;
@@ -584,6 +601,97 @@ async function fetchConversationList(mode) {
   return (await response.json()).conversations;
 }
 
+async function fetchConversationActions(conversationId) {
+  const query = new URLSearchParams({ conversation_id: conversationId });
+  const response = await fetch(`${API_PREFIX}/approvals?${query}`, {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  });
+  if (response.status === 401 || response.status === 403) {
+    setUnauthenticated();
+    throw new Error("登录状态已失效，请重新登录 ERPNext");
+  }
+  if (!response.ok) {
+    throw new Error(`无法加载草稿审批状态（${response.status}）`);
+  }
+  return (await response.json()).actions;
+}
+
+function clearActionPolling() {
+  if (state.actionPollTimer !== null) {
+    window.clearTimeout(state.actionPollTimer);
+    state.actionPollTimer = null;
+  }
+}
+
+function scheduleActionPolling(conversationId, actions = []) {
+  clearActionPolling();
+  if (
+    !conversationId ||
+    state.mode !== "agent" ||
+    !state.csrfToken ||
+    !actions.some((action) => action.status === "EXECUTING")
+  ) {
+    return;
+  }
+  state.actionPollTimer = window.setTimeout(() => {
+    state.actionPollTimer = null;
+    void refreshConversationActions(conversationId);
+  }, 5000);
+}
+
+function applyConversationActions(conversationId, actions) {
+  if (
+    state.mode !== "agent" ||
+    state.conversationIds.agent !== conversationId
+  ) {
+    return;
+  }
+  const remaining = new Map(
+    actions.map((action) => [action.action_id, action]),
+  );
+  for (const message of state.messages) {
+    const currentActionId = message.action?.action_id;
+    if (currentActionId && remaining.has(currentActionId)) {
+      updateMessage(message, { action: remaining.get(currentActionId) });
+      remaining.delete(currentActionId);
+      continue;
+    }
+    if (message.role !== "assistant" || message.action) {
+      continue;
+    }
+    for (const [actionId, action] of remaining) {
+      if (message.content.includes(actionId)) {
+        updateMessage(message, { action });
+        remaining.delete(actionId);
+        break;
+      }
+    }
+  }
+  for (const action of remaining.values()) {
+    createMessage("assistant", restoredActionMessage(action), {
+      action,
+      persisted: false,
+    });
+  }
+  scheduleActionPolling(conversationId, actions);
+}
+
+async function refreshConversationActions(conversationId) {
+  if (!conversationId || state.mode !== "agent" || !state.csrfToken) {
+    return;
+  }
+  try {
+    const actions = await fetchConversationActions(conversationId);
+    applyConversationActions(conversationId, actions);
+  } catch {
+    const currentActions = state.messages
+      .map((message) => message.action)
+      .filter(Boolean);
+    scheduleActionPolling(conversationId, currentActions);
+  }
+}
+
 async function refreshConversationList(mode) {
   if (!state.csrfToken) {
     return;
@@ -639,8 +747,26 @@ async function loadWorkspace(mode, preferredConversationId = null) {
       throw new Error(`无法加载对话历史（${response.status}）`);
     }
     const history = await response.json();
+    let actions = [];
+    let actionLoadError = null;
+    if (mode === "agent") {
+      try {
+        actions = await fetchConversationActions(activeId);
+      } catch (error) {
+        actionLoadError = error;
+      }
+    }
     if (state.mode === mode && state.conversationIds[mode] === activeId) {
-      showConversationMessages(history.messages);
+      showConversationMessages(history.messages, actions);
+      if (actionLoadError && state.csrfToken) {
+        const detail =
+          actionLoadError instanceof Error
+            ? actionLoadError.message
+            : "无法加载草稿审批状态";
+        createMessage("assistant", `对话历史已恢复，但${detail}。`, {
+          persisted: false,
+        });
+      }
     }
   } catch (error) {
     if (state.mode === mode && state.csrfToken) {

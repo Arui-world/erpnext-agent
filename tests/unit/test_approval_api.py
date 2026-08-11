@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
+from uuid import UUID
 
 import pytest
 from fastapi import HTTPException, Request
@@ -31,6 +32,7 @@ class FakeDB:
 class OwnedActionRepository:
     def __init__(self, record: ActionRecord) -> None:
         self.record = record
+        self.list_scope: dict[str, Any] | None = None
 
     async def get_for_user(
         self,
@@ -57,10 +59,35 @@ class OwnedActionRepository:
         self.record.status = ActionStatus.EXECUTING.value
         return True
 
+    async def list_for_conversation(
+        self,
+        session: AsyncSession,
+        *,
+        site: str,
+        user_id: str,
+        conversation_id: str,
+        limit: int,
+    ) -> list[ActionRecord]:
+        del session
+        self.list_scope = {
+            "site": site,
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "limit": limit,
+        }
+        return [self.record]
+
     @staticmethod
     def expire_if_needed(record: ActionRecord) -> bool:
         del record
         return False
+
+
+class ExpiringActionRepository(OwnedActionRepository):
+    @staticmethod
+    def expire_if_needed(record: ActionRecord) -> bool:
+        record.status = ActionStatus.EXPIRED.value
+        return True
 
 
 class FakeRefreshService:
@@ -188,7 +215,10 @@ def approved_action(user_id: str = "user@example.com") -> ActionRecord:
         tool_name="erpnext_create_draft",
         canonical_arguments=canonical,
         arguments_sha256=digest,
-        preview={"title": "创建 Material Request 草稿"},
+        preview={
+            "title": "创建 Material Request 草稿",
+            "conversation_id": "00000000-0000-0000-0000-000000000123",
+        },
         source_versions={},
         idempotency_key="fixed-idempotency-key",
         status=ActionStatus.APPROVED.value,
@@ -225,6 +255,71 @@ def agent_session(user_id: str = "user@example.com") -> AgentSession:
         csrf_token="csrf-token",  # noqa: S106
         created_at=datetime.now(UTC).isoformat(),
     )
+
+
+@pytest.mark.asyncio
+async def test_list_conversation_actions_is_scoped_and_includes_terminal_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = approved_action()
+    record.status = ActionStatus.SUCCEEDED.value
+    repository = OwnedActionRepository(record)
+    monkeypatch.setattr(approvals, "ActionRepository", lambda: repository)
+    request = cast(
+        Request,
+        SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(settings=SimpleNamespace(action_history_limit=25)),
+            ),
+        ),
+    )
+    db = FakeDB()
+    conversation_id = UUID("00000000-0000-0000-0000-000000000123")
+
+    response = await approvals.list_conversation_actions(
+        request,
+        agent_session(record.requested_by),
+        cast(AsyncSession, db),
+        conversation_id,
+    )
+
+    assert [action.status for action in response.actions] == [ActionStatus.SUCCEEDED.value]
+    assert repository.list_scope == {
+        "site": "dev.localhost",
+        "user_id": record.requested_by,
+        "conversation_id": str(conversation_id),
+        "limit": 25,
+    }
+    assert db.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_list_conversation_actions_persists_expired_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = approved_action()
+    record.status = ActionStatus.PENDING.value
+    repository = ExpiringActionRepository(record)
+    monkeypatch.setattr(approvals, "ActionRepository", lambda: repository)
+    request = cast(
+        Request,
+        SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(settings=SimpleNamespace(action_history_limit=50)),
+            ),
+        ),
+    )
+    db = FakeDB()
+
+    response = await approvals.list_conversation_actions(
+        request,
+        agent_session(record.requested_by),
+        cast(AsyncSession, db),
+        UUID("00000000-0000-0000-0000-000000000123"),
+    )
+
+    assert response.actions[0].status == ActionStatus.EXPIRED.value
+    assert db.commits == 1
 
 
 @pytest.mark.asyncio

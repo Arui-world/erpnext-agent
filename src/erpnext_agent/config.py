@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     action_recovery_retry_seconds: int = Field(default=60, ge=5, le=86_400)
     action_recovery_batch_size: int = Field(default=20, ge=1, le=200)
     action_execution_lock_ttl_seconds: int = Field(default=300, ge=30, le=3600)
+    action_history_limit: int = Field(default=50, ge=1, le=200)
 
     chat_history_max_messages: int = Field(default=20, ge=2, le=100)
     chat_history_max_chars: int = Field(default=24_000, ge=4_000, le=100_000)

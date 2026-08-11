@@ -75,6 +75,30 @@ class ActionRepository:
         )
         return list(result)
 
+    async def list_for_conversation(
+        self,
+        session: AsyncSession,
+        *,
+        site: str,
+        user_id: str,
+        conversation_id: str,
+        limit: int,
+    ) -> list[ActionRecord]:
+        result = await session.scalars(
+            select(ActionRecord)
+            .where(
+                ActionRecord.site == site,
+                ActionRecord.requested_by == user_id,
+                ActionRecord.preview["conversation_id"].as_string()
+                == conversation_id,
+            )
+            .order_by(ActionRecord.created_at.desc(), ActionRecord.action_id.desc())
+            .limit(limit)
+        )
+        # The database query keeps the newest bounded set. The API returns it in
+        # chronological order so restored cards follow their original chat turns.
+        return list(reversed(list(result)))
+
     async def claim_execution(self, session: AsyncSession, action_id: str) -> bool:
         now = datetime.now(UTC)
         result = cast(
