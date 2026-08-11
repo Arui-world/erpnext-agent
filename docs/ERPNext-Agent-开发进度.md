@@ -1,7 +1,7 @@
 # ERPNext Agent 开发进度
 
 > 最后更新：2026-08-11
-> 当前阶段：Token 自动刷新与长对话自动摘要已完成实现和自动化验证，待真实部署验收
+> 当前阶段：Token 自动刷新与长对话自动摘要已部署，待真实 token/模型 smoke 验收
 > 进度记录原则：每次开发任务完成后更新本文，记录实际完成内容、验证证据、遗留项和下一步。
 
 ## 一、当前状态
@@ -31,8 +31,8 @@ Chat API 不再使用库存问法正则、专用确定性服务或伪造工具�
 OAuth 凭据使用前会在过期窗口内主动刷新，并使用 Redis 分布式 single-flight
 防止并发请求重复轮换 token；MCP 首次认证失败时只刷新并重试一次，无法恢复才清理
 Agent Session 并要求重新登录。长对话会把旧的完整轮次转换为版本化摘要，与最近消息一起作为
-模型上下文，PostgreSQL 中的原始消息不删除。两项能力已通过单元/并发/回归测试，运行中的
-Agent 容器尚未替换为新镜像，真实 token 轮换和真实模型摘要待明确授权后验收。
+模型上下文，PostgreSQL 中的原始消息不删除。两项能力已通过单元/并发/回归测试，并已重启
+Agent 容器部署新镜像。真实 token 轮换和真实模型摘要仍待分别授权后验收。
 
 ## 二、已经完成
 
@@ -209,13 +209,13 @@ Agent 容器尚未替换为新镜像，真实 token 轮换和真实模型摘要�
 | Markdown 安全 | 通过，原始 `<img onerror>` 不生成 `img`，`javascript:`/`data:` 不生成链接 |
 | 前端静态资源 | Node 语法检查通过，运行中 HTML 按 `markdown.js` 再 `app.js` 的顺序加载 |
 | Redis 连接 | 通过 |
-| Agent 容器启动 | 通过，Agent、PostgreSQL、Redis 均为 healthy |
-| `/health/ready` | Redis/Database 为 `ok`，`model_configured` 与 `agent_chat_runtime` 为 `true` |
+| Agent 容器启动 | 通过，2026-08-11 重新创建后 Agent、PostgreSQL、Redis 均为 healthy |
+| `/health/ready` | Redis/Database 为 `ok`，并返回 `oauth_auto_refresh=true`、`conversation_auto_summary=true` |
 | Token 自动刷新真实验收 | 待授权；验收会实际轮换 Administrator OAuth token |
 | 长对话真实摘要验收 | 待授权；验收会调用一次真实模型并使用临时会话数据 |
 
-当前 Compose 服务仍运行上一版本；为避免未经明确授权就重启对外服务、消耗真实模型配额或轮换
-Administrator token，本阶段先以自动化测试和可重复 smoke 脚本作为代码验收证据。
+当前 Compose 服务已根据用户对“允许重启”的明确授权替换为新镜像。本次重启没有调用真实模型，
+也没有主动轮换 Administrator token；这两项真实 smoke 仍保持待授权状态。
 
 ## 四、尚未完成
 
@@ -231,7 +231,7 @@ Administrator token，本阶段先以自动化测试和可重复 smoke 脚本作
 
 ## 五、下一阶段建议
 
-1. 经明确授权后重建并重启 Agent，执行真实 token 轮换、真实模型摘要和库存回归 smoke；
+1. 经分别明确授权后执行真实 token 轮换、真实模型摘要和库存回归 smoke；
 2. 使用第二个低权限用户验证权限差分和跨用户隔离；
 3. 把草稿预览接入持久化 Action 审批与执行入口；
 4. 实现会话重命名/删除和正式数据保留策略；
