@@ -212,7 +212,7 @@ Agent 容器部署新镜像。真实 token 轮换和真实模型摘要仍待分�
 | Agent 容器启动 | 通过，2026-08-11 重新创建后 Agent、PostgreSQL、Redis 均为 healthy |
 | `/health/ready` | Redis/Database 为 `ok`，并返回 `oauth_auto_refresh=true`、`conversation_auto_summary=true` |
 | Token 自动刷新真实验收 | 待授权；验收会实际轮换 Administrator OAuth token |
-| 长对话真实摘要验收 | 待授权；验收会调用一次真实模型并使用临时会话数据 |
+| 长对话真实摘要验收 | 待授权；smoke 已限制为严格 1 次真实模型调用，临时会话结束后删除 |
 
 当前 Compose 服务已根据用户对“允许重启”的明确授权替换为新镜像。本次重启没有调用真实模型，
 也没有主动轮换 Administrator token；这两项真实 smoke 仍保持待授权状态。

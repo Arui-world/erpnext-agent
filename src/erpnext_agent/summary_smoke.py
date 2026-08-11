@@ -5,36 +5,20 @@ import json
 import secrets
 from typing import Any
 
-from agentscope.message import AssistantMsg, Msg, UserMsg
 from redis.asyncio import Redis
 from sqlalchemy import delete
 
 from erpnext_agent.agents.factory import ConfiguredAgentFactory
-from erpnext_agent.agents.replies import assistant_text
 from erpnext_agent.config import get_settings
 from erpnext_agent.conversations.memory import (
+    SUMMARY_CONTEXT_PREFIX,
     AgentSummaryGenerator,
     ConversationMemoryPolicy,
     ConversationMemoryService,
 )
 from erpnext_agent.conversations.models import ConversationRecord
-from erpnext_agent.conversations.repository import ConversationRepository, StoredMessage
+from erpnext_agent.conversations.repository import ConversationRepository
 from erpnext_agent.db import create_engine, create_session_factory
-
-
-def _model_messages(
-    summary: str,
-    recent: list[StoredMessage],
-    current: str,
-) -> list[Msg]:
-    messages: list[Msg] = [AssistantMsg(name="conversation_memory", content=summary)]
-    for item in recent:
-        if item.role == "user":
-            messages.append(UserMsg(name="user", content=item.content))
-        else:
-            messages.append(AssistantMsg(name="assistant", content=item.content))
-    messages.append(UserMsg(name="user", content=current))
-    return messages
 
 
 async def run_smoke() -> dict[str, Any]:
@@ -106,28 +90,24 @@ async def run_smoke() -> dict[str, Any]:
                 conversation_id=conversation_id,
                 limit=100,
             )
-            reply = await agent_factory.build_model_chat_agent().reply(
-                _model_messages(
-                    context.summary,
-                    context.messages,
-                    "项目代号是什么？只回复代号。",
-                )
-            )
-            recalled = assistant_text(reply).strip()
             if memory.through_sequence != 8:
                 raise RuntimeError("Summary did not cover the expected complete old turns")
             if len(all_messages) != 12:
                 raise RuntimeError("Summary unexpectedly removed original messages")
             if [item.sequence for item in context.messages] != [9, 10, 11, 12]:
                 raise RuntimeError("Summary did not retain the expected recent messages")
-            if memory_code not in memory.content or memory_code not in recalled:
-                raise RuntimeError("The summarized memory did not preserve the project code")
+            if memory_code not in memory.content:
+                raise RuntimeError("The generated summary did not preserve the project code")
+            if context.summary != SUMMARY_CONTEXT_PREFIX + memory.content:
+                raise RuntimeError("The persisted summary was not injected into model context")
             result = {
+                "model_calls": 1,
                 "summary_through_sequence": memory.through_sequence,
                 "original_message_count": len(all_messages),
                 "recent_sequences": [item.sequence for item in context.messages],
                 "summary_chars": len(memory.content),
-                "memory_code_recalled": True,
+                "memory_code_preserved_in_summary": True,
+                "summary_context_injected": True,
             }
             await db.execute(
                 delete(ConversationRecord).where(
