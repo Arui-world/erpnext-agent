@@ -46,13 +46,6 @@ from erpnext_agent.conversations.repository import (
 from erpnext_agent.conversations.repository import (
     ConversationSummary as StoredConversationSummary,
 )
-from erpnext_agent.inventory import (
-    InventoryIdentityError,
-    InventoryService,
-    MultiWarehouseStockResult,
-    extract_multiwarehouse_stock_item,
-    format_multiwarehouse_stock,
-)
 from erpnext_agent.mcp.adapter import MCPError
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -250,23 +243,6 @@ async def chat(
         await _persist_assistant(db, repository, turn.conversation_id, fixed.message)
         return fixed
 
-    inventory_item = extract_multiwarehouse_stock_item(payload.message)
-    if decision.intent == Intent.DATA and inventory_item is not None:
-        inventory = await _positive_stock_by_warehouse(
-            request,
-            session,
-            db,
-            inventory_item,
-        )
-        text = format_multiwarehouse_stock(inventory)
-        await _persist_assistant(db, repository, turn.conversation_id, text)
-        return ChatResponse(
-            status="completed",
-            route="inventory_by_warehouse",
-            message=text,
-            conversation_id=turn.conversation_id,
-        )
-
     runtime = await _prepare_runtime(request, session, db)
     agent = runtime.agent_for(decision.intent)
     try:
@@ -317,22 +293,6 @@ async def chat_stream(
 
         return StreamingResponse(
             fixed_events(),
-            media_type="text/event-stream",
-            headers={"X-Accel-Buffering": "no"},
-        )
-
-    inventory_item = extract_multiwarehouse_stock_item(payload.message)
-    if decision.intent == Intent.DATA and inventory_item is not None:
-        inventory = await _positive_stock_by_warehouse(
-            request,
-            session,
-            db,
-            inventory_item,
-        )
-        text = format_multiwarehouse_stock(inventory)
-        await _persist_assistant(db, repository, turn.conversation_id, text)
-        return StreamingResponse(
-            _inventory_events(turn.conversation_id, inventory, text),
             media_type="text/event-stream",
             headers={"X-Accel-Buffering": "no"},
         )
@@ -479,26 +439,6 @@ async def _load_credential(
     return credential
 
 
-async def _positive_stock_by_warehouse(
-    request: Request,
-    session: AgentSession,
-    db: AsyncSession,
-    requested_item: str,
-) -> MultiWarehouseStockResult:
-    credential = await _load_credential(request, session, db)
-    inventory_service = cast(InventoryService, request.app.state.inventory_service)
-    try:
-        return await inventory_service.positive_stock_by_warehouse(
-            access_token=credential.access_token,
-            expected_user=session.user_id,
-            requested_item=requested_item,
-        )
-    except InventoryIdentityError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except MCPError as exc:
-        raise _mcp_http_exception(exc) from exc
-
-
 def _mcp_http_exception(exc: MCPError) -> HTTPException:
     status_code = 401 if exc.code == "MCP_AUTH_FAILED" else 502
     return HTTPException(
@@ -570,24 +510,6 @@ async def _persistent_reply_events(
 
     async for event in _reply_events(agent, turn.messages, on_complete=persist_reply):
         yield event
-
-
-async def _inventory_events(
-    conversation_id: str,
-    result: MultiWarehouseStockResult,
-    text: str,
-) -> AsyncIterator[str]:
-    yield _sse("conversation", {"conversation_id": conversation_id})
-    for index, tool_name in enumerate(result.tool_calls, start=1):
-        tool_call_id = f"inventory-{index}"
-        yield _sse(
-            "tool_call_start",
-            {"tool_call_id": tool_call_id, "tool_name": tool_name},
-        )
-        yield _sse("tool_result_start", {"tool_call_id": tool_call_id})
-        yield _sse("tool_result_end", {"tool_call_id": tool_call_id})
-    yield _sse("text_delta", {"delta": text})
-    yield _sse("done", {"finished_reason": "completed"})
 
 
 async def _reply_events(

@@ -1,7 +1,7 @@
 # ERPNext Agent 开发进度
 
-> 最后更新：2026-08-10
-> 当前阶段：真实 OAuth 身份下的物料多仓正库存自动查询完成
+> 最后更新：2026-08-11
+> 当前阶段：Data Agent 已接入 MCP 物料多仓库存聚合工具
 > 进度记录原则：每次开发任务完成后更新本文，记录实际完成内容、验证证据、遗留项和下一步。
 
 ## 一、当前状态
@@ -22,8 +22,9 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 左侧历史侧栏会列出持久化会话，支持切换和创建独立新对话，页面刷新时恢复最近会话。
 
 真实 ERPNext OAuth 用户的库存查询已完成单仓和多仓两条端到端链路。指定精确仓库时使用
-`erpnext_get_stock_balance`；只提供物料编码或唯一物料名称时，后端会直接以当前 OAuth
-身份查询 Item 和 `actual_qty > 0` 的 Bin，返回所有正库存仓库，不再要求用户先指定仓库。
+`erpnext_get_stock_balance`；只提供物料时，Data Agent 单次调用
+`erpnext_get_item_stock_by_warehouses`，使用 MCP 返回的当前用户可见叶子仓库明细和数量合计回答。
+Chat API 不再使用库存问法正则、专用确定性服务或伪造工具事件截获该请求。
 
 ## 二、已经完成
 
@@ -53,7 +54,7 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 - Chat 和 SSE 均使用 OAuth Session 与 CSRF 防护；
 - 查询/巡检中的模型或 MCP 失败对客户端返回稳定错误，不泄露凭据和底层连接信息。
 - 流式 Agent 在结束事件中没有文本时，会返回并持久化可重试提示，不再向前端透传空回复；
-- Chat 和 SSE 对常见“物料的库存”表达接入确定性多仓查询，流中仍返回工具状态和完成事件；
+- Chat 和 SSE 的库存请求统一进入 AgentScope 运行时，流中返回真实 MCP 工具事件；
 - 新增受 Session/CSRF 保护的 `/api/v1/chat/model/stream`，用于无工具模型多轮对话；
 - 新增根路径聊天页面和本地 CSS/JavaScript 静态资源，不依赖外部 CDN；
 - 页面支持模型/ERPNext Agent 模式切换、快捷问题、流式文本、工具状态和响应式布局。
@@ -75,7 +76,8 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 - 实现 HTTP、JSON-RPC、MCP `isError`、业务信封 `ok` 四层响应检查；
 - 正常结果只消费 `structuredContent`，避免重复注入文本副本；
 - 业务数据统一标记为 `untrusted_business_data`；
-- 运行时发现工具后可核对既定的 13 个 MCP 工具；
+- 运行时发现工具后可核对既定的 14 个 MCP 工具；
+- 新增多仓库库存领域工具的只读白名单，Data、Patrol 和 Action 可用，Orchestrator 仍无工具；
 - 实现自定义 `ERPNextMCPTool(ToolBase)`，原样保留服务器 `inputSchema`；
 - ToolBase 只向模型传递结构化 `data`、内容信任标记和白名单元数据；
 - MCP 领域错误转换为 AgentScope 错误 ToolChunk，并保留安全的 `trace_id`；
@@ -91,7 +93,7 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 - 建立 Orchestrator、Data、Action 和 Patrol Agent 构造边界与系统提示；
 - 建立保守的确定性意图门控；
 - 当前消息意图不完整时，只继承最近一条明确的用户意图；当前消息的禁止或写操作关键词仍优先；
-- 指定仓库时使用单仓库存工具；未指定仓库但物料明确时自动查询正库存 Bin；
+- 指定仓库时使用单仓库存工具；未指定仓库但已给出物料时单次调用 MCP 多仓聚合工具；
 - 每次请求创建独立 Agent 与 Toolkit，不共享用户 access token 或会话状态；
 - Agent 运行前再次核对 Agent Session 用户与 MCP 当前用户；
 - Data/Patrol 已接入模型工具循环，Action 意图在聊天层停在持久化审批入口；
@@ -128,23 +130,22 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 - 左侧响应式历史栏支持新建、切换和移动端展开/收起；
 - 新增 `memory_smoke`，用随机码执行两轮真实模型调用并直接回查 PostgreSQL。
 
-### 2.8 确定性多仓库存
+### 2.8 MCP 多仓库存聚合
 
-- 支持“`test item1的库存`”、“查询物料 `test item1` 库存”等常见无仓库表达；
-- 优先按 Item `name` 精确匹配，未命中时按 `item_name` 匹配；
-- 物料唯一时自动分页查询 Bin，强制 `item_code` 匹配且 `actual_qty > 0`；
-- 返回每个正库存仓库的实际、预留和预计数量，并计算实际库存合计；
-- 空结果明确说明无正库存，多个同名物料则请用户选择精确物料编码；
-- 查询前仍核对 Agent Session 与 MCP 当前用户，Item/Bin 列表仍由 Frappe RBAC 和 User Permission 裁剪；
-- 每页 100 条、最多 10 页，超过 1000 条时明确标记截断；
-- 确定性回复在 SSE `done` 前写入 PostgreSQL，不依赖大模型规划这一固定查询。
+- 已删除 `InventoryService`、库存语句正则提取和 Chat/SSE 特判分支；
+- Data Agent 对“已给出物料、未指定仓库”请求，首个且唯一工具为
+  `erpnext_get_item_stock_by_warehouses`；
+- 物料文本原样作为 `item_code`，不先调用 Item Schema/List，物料不存在和权限拒绝以 MCP 结果为准；
+- 使用 MCP 返回的 `warehouses`、`totals`、`stock_uom` 和 `scope` 回答；
+- 不通过通用 Bin 分页查询、不逐仓循环单仓工具、不跨公司/币种汇总库存价值；
+- 新增 `stock_smoke`，可重复验证工具序列、真实回复和 PostgreSQL 会话落库。
 
 ## 三、验证证据
 
 | 检查项 | 结果 |
 |---|---|
 | `uv.lock` 依赖解析 | 通过，锁定 AgentScope 2.0.5 |
-| Pytest | 47 项通过，包含物料提取、OAuth 身份、Item/Bin 参数和多仓回复测试 |
+| Pytest | 41 项通过，包含新工具白名单和 Data Agent 库存决策规则 |
 | Ruff | 通过，无问题 |
 | Mypy strict | 通过，检查 57 个源码文件 |
 | Docker Compose config | 通过 |
@@ -160,8 +161,9 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 | 真实库存结果 | `test item1` / `Stores - TQC` 返回 `0.0 Nos`、库存价值 `0.0 INR` |
 | Agent 会话落库 | 通过，三轮会话持久化 6 条 user/assistant 消息 |
 | 无仓库物料库存请求 | 通过，只输入“`test item1的库存`”，未追问仓库 |
-| 真实多仓正库存 | 返回 `仓库 - rw`：实际 `10.0 Nos`、预留 `0.0 Nos`、预计 `10.0 Nos` |
-| 多仓会话落库 | 通过，会话 `10279862-b845-451c-b4e6-587a2c590a60` 持久化 2 条消息 |
+| 真实 MCP 工具序列 | 仅 1 次 `erpnext_get_item_stock_by_warehouses`，无 Item/Bin 通用查询 |
+| 真实多仓库存 | 返回 `仓库 - rw`：实际 `10.0 Nos`、预计 `10.0 Nos`，未汇总库存价值 |
+| 多仓会话落库 | 通过，会话 `3948e148-6e51-4e9e-a74f-f2ade2f9dd0c` 持久化 user/assistant 两条消息 |
 | 会话列表与新建 | 通过，列表返回 4 条消息计数，新建会话获得独立 UUID |
 | 前端静态资源 | Node 语法检查通过，运行中 HTML/CSS/JS 均包含新版多会话组件 |
 | Redis 连接 | 通过 |
@@ -179,7 +181,7 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 - 尚未建立 Alembic 等正式数据库迁移流程；
 - OpenTelemetry 当前只有接入边界，尚未配置正式 exporter 和 Trace；
 - 40 个评估场景目前只有目录骨架，尚未实现 Runner 与报告。
-- 确定性多仓查询当前为常见无仓库表达提取，更复杂的口语化复合问题仍交给 Data Agent；
+- MCP 多仓工具只返回当前 Bin 聚合值，不包含历史日期和库存价值；
 
 ## 五、下一阶段建议
 

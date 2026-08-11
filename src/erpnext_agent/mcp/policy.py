@@ -10,6 +10,7 @@ READ_TOOLS = frozenset(
         "erpnext_get_doc",
         "erpnext_get_count",
         "erpnext_get_stock_balance",
+        "erpnext_get_item_stock_by_warehouses",
         "erpnext_get_customer_summary",
         "erpnext_get_supplier_summary",
         "erpnext_get_receivables_summary",
@@ -53,4 +54,3 @@ def tools_for_agent(agent_name: str) -> frozenset[str]:
 def assert_tool_allowed(agent_name: str, tool_name: str) -> None:
     if tool_name not in tools_for_agent(agent_name):
         raise ToolPolicyError(f"{agent_name} cannot call {tool_name}")
-

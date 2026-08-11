@@ -23,7 +23,6 @@ from erpnext_agent.auth.session_store import OAuthStateStore, SessionStore
 from erpnext_agent.auth.token_store import TokenStore
 from erpnext_agent.config import Settings, get_settings
 from erpnext_agent.db import create_engine, create_schema, create_session_factory
-from erpnext_agent.inventory import InventoryService
 from erpnext_agent.mcp.adapter import ERPNextMCPAdapter
 
 
@@ -69,8 +68,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             agent_factory=app.state.agent_factory,
             adapter=app.state.mcp_adapter,
         )
-        app.state.inventory_service = InventoryService(app.state.mcp_adapter)
-
         if resolved.auto_create_schema:
             await create_schema(engine)
         try:

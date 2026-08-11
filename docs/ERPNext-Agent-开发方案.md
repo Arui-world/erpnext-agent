@@ -45,7 +45,7 @@ from agentscope.tool import FunctionTool, Toolkit
 
 ### 1.2 当前 MCP 是既有基线
 
-erpnext_mcp_tools 已有 13 个工具：
+erpnext_mcp_tools 已有 14 个工具：
 
 ~~~text
 erpnext_health
@@ -56,6 +56,7 @@ erpnext_get_list
 erpnext_get_doc
 erpnext_get_count
 erpnext_get_stock_balance
+erpnext_get_item_stock_by_warehouses
 erpnext_get_customer_summary
 erpnext_get_supplier_summary
 erpnext_get_receivables_summary
@@ -300,7 +301,7 @@ structuredContent.ok = false
 6. 从服务端 annotations 与本地强制策略共同设置 is_read_only；写工具始终进入 HITL；
 7. 只把 allowlist 内的 ERPNextMCPTool 放入 Toolkit(tools=[...])。
 
-Adapter 必须有契约测试证明所有 13 个工具的 Schema 未被改写，并覆盖 ok=false/isError=false 的失败场景。
+Adapter 必须有契约测试证明所有 14 个工具的 Schema 未被改写，并覆盖 ok=false/isError=false 的失败场景。
 
 ### 5.3 Agent 构造
 
@@ -361,6 +362,7 @@ erpnext_get_list
 erpnext_get_doc
 erpnext_get_count
 erpnext_get_stock_balance
+erpnext_get_item_stock_by_warehouses
 erpnext_get_customer_summary
 erpnext_get_supplier_summary
 erpnext_get_receivables_summary
@@ -370,6 +372,7 @@ erpnext_get_receivables_summary
 
 - DocType/字段不确定时先发现 Schema；
 - 优先使用固化口径的领域工具；
+- 仅给出物料时，优先单次调用多仓库库存领域工具，不通过通用 Bin 查询或逐仓循环聚合；
 - 金额、数量和状态结论必须引用工具数据；
 - 多币种只按 outstanding_by_currency 分开呈现；
 - 空结果就是结果，不补造；
@@ -667,7 +670,7 @@ erpnext-agent/
 
 ## 十二、四周开发计划
 
-当前 ERPNext、MCP app 和 13 个工具已经存在，排期从 Agent 接入开始，不再安排“新建 MCP app”。
+当前 ERPNext、MCP app 和 14 个工具已经存在，排期从 Agent 接入开始，不再安排“新建 MCP app”。
 
 ### 第 1 周：身份、契约和框架地基
 

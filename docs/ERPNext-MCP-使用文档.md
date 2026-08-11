@@ -8,7 +8,7 @@
 
 ## 1. 能力边界
 
-当前 MCP Server 提供 13 个同步 Tools，用于：
+当前 MCP Server 提供 14 个同步 Tools，用于：
 
 - 获取当前 ERPNext 用户及其角色；
 - 发现允许访问的 DocType 和字段；
@@ -333,6 +333,7 @@ def normalize_tool_response(http_status: int, rpc: dict) -> tuple[dict, dict]:
 | 通用只读 | `erpnext_get_doc` | Data、Action | 查询一张单据及安全子表 |
 | 通用只读 | `erpnext_get_count` | Data、Patrol | 只返回符合条件的数量 |
 | 库存 | `erpnext_get_stock_balance` | Data、Patrol、Action | 查询指定物料和仓库的库存与估值 |
+| 库存 | `erpnext_get_item_stock_by_warehouses` | Data、Patrol、Action | 按物料聚合当前用户可见叶子仓库的当前 Bin 数量 |
 | 销售 | `erpnext_get_customer_summary` | Data、Action | 客户档案、信用额度、未结销售发票 |
 | 采购 | `erpnext_get_supplier_summary` | Data、Action | 供应商档案、未结采购发票 |
 | 财务 | `erpnext_get_receivables_summary` | Data、Patrol | 公司/客户维度应收摘要 |
@@ -600,7 +601,45 @@ Action Agent 更新前必须重新调用本工具，保存精确 `modified` 作�
 
 不要仅凭名称猜测物料和仓库。先用 `erpnext_get_list` 找到精确值，再查余额。
 
-### 7.2 `erpnext_get_customer_summary`
+### 7.2 `erpnext_get_item_stock_by_warehouses`
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| `item_code` | string | 是 | 精确 Item 编码，最长 180 字符 |
+
+用于回答“一个物料在所有仓库有多少当前库存”。工具读取 ERPNext `Bin` 当前聚合值，一次返回当前用户可见的所有叶子仓库中、该物料已经存在 Bin 的仓库；没有 Bin 的仓库不会生成零库存占位行。
+
+调用者必须同时具备 Item、Warehouse、Bin、Stock Ledger Entry 读取权限，以及相关返回字段的 permlevel 读取权限。仓库列表通过当前用户身份的 `frappe.get_list` 取得，不能借此绕过 Warehouse User Permission。
+
+调用示例：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 72,
+  "method": "tools/call",
+  "params": {
+    "name": "erpnext_get_item_stock_by_warehouses",
+    "arguments": {"item_code": "test item1"}
+  }
+}
+```
+
+`data.warehouses` 的每行包含：
+
+```text
+warehouse, company, warehouse_disabled
+actual_qty, reserved_qty, reserved_stock, ordered_qty
+indented_qty, planned_qty, projected_qty
+```
+
+`data.totals` 对上述七个数量字段逐项合计；因为所有行属于同一 Item，所以共用返回的 `stock_uom`。工具不返回或汇总 `stock_value`，避免跨公司、跨币种直接相加。`scope` 明确标记这是当前 Bin 数量、仅限可见叶子仓库、且省略没有 Bin 的仓库。
+
+当前 `dev.localhost` 验收物料 `test item1` 的实际结果为一个仓库 `仓库 - rw`，`stock_uom=Nos`，`actual_qty=10.0`，`projected_qty=10.0`，`totals.actual_qty=10.0`；该结果已与同一 Item 的原始 Bin 行交叉核对。
+
+这是当前库存聚合工具，不支持历史日期。需要指定历史日期和单仓估值时，继续使用 `erpnext_get_stock_balance`。
+
+### 7.3 `erpnext_get_customer_summary`
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---:|---|
@@ -617,7 +656,7 @@ credit_limits, currency, outstanding_amount, open_invoice_count
 outstanding_by_currency, open_invoices, detail_limit, scope, queried_at
 ```
 
-### 7.3 `erpnext_get_supplier_summary`
+### 7.4 `erpnext_get_supplier_summary`
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---:|---|
@@ -634,7 +673,7 @@ currency, outstanding_amount, open_invoice_count, outstanding_by_currency
 open_invoices, detail_limit, scope, queried_at
 ```
 
-### 7.4 `erpnext_get_receivables_summary`
+### 7.5 `erpnext_get_receivables_summary`
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |---|---|---:|---:|---|
@@ -1104,6 +1143,7 @@ npx @modelcontextprotocol/inspector --cli \
 - [ ] DocType 和字段不确定时先发现 Schema。
 - [ ] 分页有页数、总行数和超时上限。
 - [ ] 数量问题优先 `get_count`，子表问题才用 `get_doc`。
+- [ ] 物料全仓当前库存优先使用 `erpnext_get_item_stock_by_warehouses`，不逐仓循环调用单仓工具。
 - [ ] 多币种金额不会直接相加。
 - [ ] 空结果不被模型补造。
 
