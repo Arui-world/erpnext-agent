@@ -1,11 +1,8 @@
 # ERPNext Agent
 
-这是依据 [`docs/ERPNext-Agent-开发方案.md`](docs/ERPNext-Agent-开发方案.md) 搭建的第一阶段服务骨架。
-技术基线固定为 Python 3.12、`agentscope==2.0.5`、FastAPI、PostgreSQL、Redis，以及现有的
-ERPNext MCP endpoint。
-
-要从当前代码理解完整请求链、Agent 分工、Token 刷新、MCP 调用和长对话摘要，请阅读
-[`Agent 运行机制与 Workflow 说明`](docs/2026-08-11-Agent运行机制与Workflow说明.md)。
+这是一个基于 AgentScope、FastAPI、PostgreSQL 和 Redis 的 ERPNext Agent 服务。
+技术基线固定为 Python 3.12、`agentscope==2.0.5`，并通过现有 ERPNext MCP endpoint
+使用当前登录用户权限访问业务数据。
 
 ## 当前已经实现
 
