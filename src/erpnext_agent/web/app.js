@@ -13,11 +13,16 @@ const MODES = {
   },
   agent: {
     endpoint: `${API_PREFIX}/chat/stream`,
-    hint: "使用当前 ERPNext 用户权限调用只读工具",
-    placeholder: "查询库存、订单或执行只读巡检…",
+    hint: "使用当前 ERPNext 用户权限；草稿写入必须预览并批准",
+    placeholder: "查询业务数据，或创建/修改 ERPNext 草稿…",
     welcome:
-      "已切换到 ERPNext Agent。查询与巡检会使用当前登录用户的权限；创建或修改草稿仍需持久化审批。",
-    suggestions: ["查询最近的销售订单", "查看当前库存", "巡检逾期应收"],
+      "已切换到 ERPNext Agent。查询与巡检使用当前登录用户权限；创建或修改草稿会先生成持久化预览，只有你批准后才会执行。",
+    suggestions: [
+      "查询最近的销售订单",
+      "查看当前库存",
+      "巡检逾期应收",
+      "创建物料需求草稿",
+    ],
   },
 };
 
@@ -124,6 +129,8 @@ function createMessage(role, content, options = {}) {
     persisted: options.persisted ?? true,
     pending: options.pending ?? false,
     toolState: "",
+    action: options.action ?? null,
+    actionBusy: false,
     node: null,
   };
   state.messages.push(message);
@@ -168,6 +175,186 @@ function renderMessage(message) {
   const toolState = message.node.querySelector(".tool-state");
   toolState.textContent = message.toolState;
   toolState.classList.toggle("hidden", !message.toolState);
+  renderActionCard(message);
+}
+
+function actionStatusLabel(status) {
+  return {
+    PENDING: "等待批准",
+    APPROVED: "已批准，等待执行",
+    EXECUTING: "执行状态待核对",
+    SUCCEEDED: "草稿已保存",
+    FAILED: "执行失败",
+    REJECTED: "已拒绝",
+    EXPIRED: "已过期",
+  }[status] || status || "未知状态";
+}
+
+function actionButton(label, kind, handler, disabled = false) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `action-button ${kind}`;
+  button.textContent = label;
+  button.disabled = disabled;
+  button.addEventListener("click", handler);
+  return button;
+}
+
+function renderActionCard(message) {
+  const card = message.node.querySelector(".action-card");
+  card.replaceChildren();
+  card.classList.toggle("hidden", !message.action);
+  if (!message.action) {
+    return;
+  }
+
+  const action = message.action;
+  const preview = action.preview || {};
+  const header = document.createElement("div");
+  header.className = "action-card-header";
+  const title = document.createElement("strong");
+  title.textContent = preview.title || "ERPNext 草稿审批";
+  const status = document.createElement("span");
+  status.className = `action-status status-${String(action.status || "").toLowerCase()}`;
+  status.textContent = actionStatusLabel(action.status);
+  header.append(title, status);
+
+  const identity = document.createElement("code");
+  identity.className = "action-id";
+  identity.textContent = action.action_id;
+
+  const details = document.createElement("pre");
+  details.className = "action-preview";
+  details.textContent = JSON.stringify(
+    {
+      doctype: preview.doctype,
+      name: preview.document_name,
+      fields: preview.fields || {},
+      items: preview.items || [],
+    },
+    null,
+    2,
+  );
+
+  card.append(header, identity, details);
+  if (action.result_reference) {
+    const result = document.createElement("p");
+    result.className = "action-result";
+    result.textContent = `已保存草稿 ${action.result_reference.doctype} ${action.result_reference.name}（docstatus=0）`;
+    card.append(result);
+  } else if (action.failure_code) {
+    const failure = document.createElement("p");
+    failure.className = "action-failure";
+    failure.textContent = `${action.failure_code}：${action.failure_message || "操作失败"}`;
+    card.append(failure);
+  }
+
+  const controls = document.createElement("div");
+  controls.className = "action-controls";
+  if (action.status === "PENDING") {
+    controls.append(
+      actionButton(
+        "批准并执行",
+        "approve",
+        () => void approveAndExecuteAction(message),
+        message.actionBusy,
+      ),
+      actionButton(
+        "拒绝",
+        "reject",
+        () => void decideAction(message, "reject"),
+        message.actionBusy,
+      ),
+    );
+  } else if (action.status === "APPROVED") {
+    controls.append(
+      actionButton(
+        "继续执行",
+        "approve",
+        () => void executeAction(message),
+        message.actionBusy,
+      ),
+    );
+  } else if (action.status === "EXECUTING") {
+    controls.append(
+      actionButton(
+        "使用原幂等键重新核对",
+        "approve",
+        () => void executeAction(message),
+        message.actionBusy,
+      ),
+    );
+  }
+  if (controls.childNodes.length) {
+    card.append(controls);
+  }
+}
+
+async function actionRequest(path, options = {}) {
+  const response = await fetch(`${API_PREFIX}${path}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": state.csrfToken,
+    },
+    ...options,
+  });
+  if (response.status === 401 || response.status === 403) {
+    setUnauthenticated();
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail = payload?.detail;
+    throw new Error(detail?.message || detail || `Action 请求失败（${response.status}）`);
+  }
+  return response.json();
+}
+
+async function decideAction(message, decision) {
+  if (!message.action || message.actionBusy) {
+    return null;
+  }
+  message.actionBusy = true;
+  renderMessage(message);
+  try {
+    const action = await actionRequest(
+      `/approvals/${encodeURIComponent(message.action.action_id)}/decision`,
+      { body: JSON.stringify({ decision }) },
+    );
+    updateMessage(message, { action, actionBusy: false });
+    return action;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "审批失败";
+    updateMessage(message, { actionBusy: false, toolState: detail });
+    return null;
+  }
+}
+
+async function executeAction(message) {
+  if (!message.action || message.actionBusy) {
+    return null;
+  }
+  message.actionBusy = true;
+  updateMessage(message, { toolState: "正在保存 ERPNext 草稿" });
+  try {
+    const action = await actionRequest(
+      `/approvals/${encodeURIComponent(message.action.action_id)}/execute`,
+    );
+    updateMessage(message, { action, actionBusy: false, toolState: "" });
+    return action;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "草稿执行失败";
+    updateMessage(message, { actionBusy: false, toolState: detail });
+    return null;
+  }
+}
+
+async function approveAndExecuteAction(message) {
+  const approved = await decideAction(message, "approve");
+  if (approved?.status === "APPROVED") {
+    await executeAction(message);
+  }
 }
 
 function updateMessage(message, patch) {
@@ -365,6 +552,9 @@ function handleStreamEvent(message, event, data, mode) {
       break;
     case "tool_result_end":
       updateMessage(message, { toolState: "工具调用完成" });
+      break;
+    case "action_required":
+      updateMessage(message, { action: data, toolState: "等待用户批准草稿操作" });
       break;
     case "error":
       throw new Error(data.message || "模型回复失败");

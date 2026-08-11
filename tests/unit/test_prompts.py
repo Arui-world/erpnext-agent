@@ -1,4 +1,4 @@
-from erpnext_agent.agents.prompts import DATA_SYSTEM_PROMPT
+from erpnext_agent.agents.prompts import ACTION_SYSTEM_PROMPT, DATA_SYSTEM_PROMPT
 
 
 def test_data_agent_uses_aggregate_tool_when_warehouse_is_missing() -> None:
@@ -12,3 +12,11 @@ def test_data_agent_uses_aggregate_tool_when_warehouse_is_missing() -> None:
 
 def test_data_agent_keeps_exact_warehouse_stock_tool_path() -> None:
     assert "erpnext_get_stock_balance 查询该仓库" in DATA_SYSTEM_PROMPT
+
+
+def test_action_agent_can_only_create_persistent_proposals() -> None:
+    assert "erpnext_propose_draft_action" in ACTION_SYSTEM_PROMPT
+    assert "不得包含\nidempotency_key" in ACTION_SYSTEM_PROMPT
+    assert "不会写入 ERPNext" in ACTION_SYSTEM_PROMPT
+    assert "不得直接调用 ERPNext 写工具" in ACTION_SYSTEM_PROMPT
+    assert "不能声称已提交、已过账或已预占库存" in ACTION_SYSTEM_PROMPT

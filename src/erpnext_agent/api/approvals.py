@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import secrets
 from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from erpnext_agent.actions.executor import ActionExecutor
 from erpnext_agent.actions.gateway import ActionGateway
+from erpnext_agent.actions.models import ActionStatus
 from erpnext_agent.actions.repository import ActionNotFoundError, ActionRepository, ActionStateError
 from erpnext_agent.api.dependencies import CurrentSession, DBSession, ProtectedSession
+from erpnext_agent.auth.session_store import SessionStore
+from erpnext_agent.auth.token_refresh import TokenRefreshError, TokenRefreshService
+from erpnext_agent.mcp.adapter import MCPBusinessError, MCPContractError, MCPError
+from erpnext_agent.mcp.refreshing_caller import RefreshingMCPCaller
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
 
@@ -26,6 +33,11 @@ class ActionView(BaseModel):
     created_at: datetime
     expires_at: datetime
     decided_at: datetime | None
+    executed_at: datetime | None
+    mcp_trace_id: str | None
+    result_reference: dict[str, Any] | None
+    failure_code: str | None
+    failure_message: str | None
 
 
 def _view(record: Any) -> ActionView:
@@ -38,6 +50,11 @@ def _view(record: Any) -> ActionView:
         created_at=record.created_at,
         expires_at=record.expires_at,
         decided_at=record.decided_at,
+        executed_at=record.executed_at,
+        mcp_trace_id=record.mcp_trace_id,
+        result_reference=record.result_reference,
+        failure_code=record.failure_code,
+        failure_message=record.failure_message,
     )
 
 
@@ -52,6 +69,8 @@ async def get_action(action_id: str, session: CurrentSession, db: DBSession) -> 
         )
     except ActionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Action not found") from exc
+    if ActionRepository.expire_if_needed(record):
+        await db.commit()
     return _view(record)
 
 
@@ -77,6 +96,112 @@ async def decide_action(
         )
     except ActionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Action not found") from exc
+    except ActionStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _view(record)
+
+
+@router.post("/{action_id}/execute", response_model=ActionView)
+async def execute_action(
+    action_id: str,
+    request: Request,
+    session: ProtectedSession,
+    db: DBSession,
+) -> ActionView:
+    repository = ActionRepository()
+    try:
+        record = await repository.get_for_user(
+            db,
+            action_id=action_id,
+            site=session.site,
+            user_id=session.user_id,
+        )
+    except ActionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Action not found") from exc
+
+    if repository.expire_if_needed(record):
+        await db.commit()
+        raise HTTPException(status_code=409, detail="Action approval has expired")
+    if record.status == ActionStatus.SUCCEEDED.value:
+        return _view(record)
+    if record.status not in {
+        ActionStatus.APPROVED.value,
+        ActionStatus.EXECUTING.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Action cannot execute from status {record.status}",
+        )
+    if record.decided_by != session.user_id:
+        raise HTTPException(status_code=403, detail="Action decision identity mismatch")
+
+    refresh_service: TokenRefreshService = request.app.state.token_refresh_service
+    session_store: SessionStore = request.app.state.session_store
+    try:
+        credential = await refresh_service.get_valid(db, session.credential_id)
+    except TokenRefreshError as exc:
+        await session_store.delete(session.session_id)
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "REAUTHENTICATION_REQUIRED", "message": str(exc)},
+        ) from exc
+
+    caller = RefreshingMCPCaller(
+        adapter=request.app.state.mcp_adapter,
+        refresh_service=refresh_service,
+        db=db,
+        credential=credential,
+        session_store=session_store,
+        agent_session_id=session.session_id,
+    )
+    try:
+        identity = await caller.call_tool(
+            access_token=credential.access_token,
+            name="erpnext_get_current_user",
+            arguments={},
+        )
+        user = identity.data.get("user") if isinstance(identity.data, dict) else None
+        if not isinstance(user, str):
+            raise MCPContractError(
+                "Current-user response has no user",
+                code="INVALID_IDENTITY",
+            )
+        if not secrets.compare_digest(user.casefold(), session.user_id.casefold()):
+            raise HTTPException(
+                status_code=403,
+                detail="Agent session and ERPNext MCP identities do not match",
+            )
+        executor = ActionExecutor(repository, caller)
+        if record.status == ActionStatus.EXECUTING.value:
+            await executor.reconcile(
+                db,
+                action=record,
+                access_token=credential.access_token,
+            )
+        else:
+            await executor.execute(
+                db,
+                action=record,
+                access_token=credential.access_token,
+            )
+    except HTTPException:
+        raise
+    except MCPBusinessError as exc:
+        if exc.code == "PERMISSION_DENIED":
+            status_code = 403
+        elif exc.code == "VERSION_CONFLICT":
+            status_code = 409
+        else:
+            status_code = 422
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc), "trace_id": exc.trace_id},
+        ) from exc
+    except MCPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": exc.code, "message": str(exc), "trace_id": exc.trace_id},
+        ) from exc
     except ActionStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _view(record)

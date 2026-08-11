@@ -21,6 +21,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from erpnext_agent.actions.gateway import ActionGateway
+from erpnext_agent.actions.proposal import (
+    ActionProposalService,
+    ActionProposalTool,
+    action_public_payload,
+    action_summary_markdown,
+)
+from erpnext_agent.actions.repository import ActionRepository
 from erpnext_agent.agents.factory import ConfiguredAgentFactory
 from erpnext_agent.agents.orchestrator import Intent, IntentGate, RouteDecision
 from erpnext_agent.agents.replies import assistant_text
@@ -98,10 +106,12 @@ class ChatResponse(BaseModel):
         "denied",
         "clarification_required",
         "action_requires_persistent_approval",
+        "action_pending_approval",
     ]
     route: str
     message: str
     conversation_id: str
+    action: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,7 +251,14 @@ async def chat(
         await _persist_assistant(db, repository, turn.conversation_id, fixed.message)
         return fixed
 
-    runtime = await _prepare_runtime(request, session, db)
+    runtime = await _prepare_runtime(
+        request,
+        session,
+        db,
+        action_conversation_id=(
+            turn.conversation_id if decision.intent == Intent.ACTION else None
+        ),
+    )
     agent = runtime.agent_for(decision.intent)
     try:
         reply = await agent.reply(turn.messages)
@@ -250,12 +267,20 @@ async def chat(
     text = assistant_text(reply)
     if not text:
         raise HTTPException(status_code=502, detail="Model returned no text")
+    action = (
+        runtime.action_proposal_tool.record
+        if runtime.action_proposal_tool is not None
+        else None
+    )
+    if action is not None:
+        text += action_summary_markdown(action)
     await _persist_assistant(db, repository, turn.conversation_id, text)
     return ChatResponse(
-        status="completed",
+        status="action_pending_approval" if action is not None else "completed",
         route=decision.target_agent or decision.intent.value,
         message=text,
         conversation_id=turn.conversation_id,
+        action=action_public_payload(action) if action is not None else None,
     )
 
 
@@ -295,7 +320,14 @@ async def chat_stream(
             headers={"X-Accel-Buffering": "no"},
         )
 
-    runtime = await _prepare_runtime(request, session, db)
+    runtime = await _prepare_runtime(
+        request,
+        session,
+        db,
+        action_conversation_id=(
+            turn.conversation_id if decision.intent == Intent.ACTION else None
+        ),
+    )
     agent = runtime.agent_for(decision.intent)
     return StreamingResponse(
         _persistent_reply_events(
@@ -303,6 +335,7 @@ async def chat_stream(
             turn,
             db,
             repository,
+            action_proposal_tool=runtime.action_proposal_tool,
         ),
         media_type="text/event-stream",
         headers={"X-Accel-Buffering": "no"},
@@ -413,6 +446,8 @@ async def _prepare_runtime(
     request: Request,
     session: AgentSession,
     db: AsyncSession,
+    *,
+    action_conversation_id: str | None = None,
 ) -> PreparedAgentRuntime:
     refresh_service = cast(
         TokenRefreshService,
@@ -439,11 +474,30 @@ async def _prepare_runtime(
             session_store=session_store,
             agent_session_id=session.session_id,
         )
+        action_proposal_tool: ActionProposalTool | None = None
+        if action_conversation_id is not None:
+            settings = cast(Settings, request.app.state.settings)
+            action_proposal_tool = ActionProposalTool(
+                service=ActionProposalService(
+                    ActionGateway(
+                        ActionRepository(),
+                        ttl_seconds=settings.action_ttl_seconds,
+                    ),
+                    caller,
+                ),
+                session=db,
+                session_id=session.session_id,
+                site=session.site,
+                requested_by=session.user_id,
+                access_token=credential.access_token,
+                conversation_id=action_conversation_id,
+            )
         try:
             return await runtime_factory.prepare(
                 access_token=credential.access_token,
                 expected_user=session.user_id,
                 tool_caller=caller,
+                action_proposal_tool=action_proposal_tool,
             )
         except AgentIdentityError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -501,13 +555,6 @@ def _fixed_policy_response(
             message="请说明要查询、巡检，还是创建/修改哪一种 ERPNext 草稿。",
             conversation_id=conversation_id,
         )
-    if decision.intent == Intent.ACTION:
-        return ChatResponse(
-            status="action_requires_persistent_approval",
-            route=decision.intent.value,
-            message="草稿写入必须先生成持久化预览和审批 Action；当前聊天运行时不会直接写入。",
-            conversation_id=conversation_id,
-        )
     return None
 
 
@@ -545,13 +592,20 @@ async def _persistent_reply_events(
     turn: StartedTurn,
     db: AsyncSession,
     repository: ConversationRepository,
+    *,
+    action_proposal_tool: ActionProposalTool | None = None,
 ) -> AsyncIterator[str]:
     yield _sse("conversation", {"conversation_id": turn.conversation_id})
 
     async def persist_reply(content: str) -> None:
         await _persist_assistant(db, repository, turn.conversation_id, content)
 
-    async for event in _reply_events(agent, turn.messages, on_complete=persist_reply):
+    async for event in _reply_events(
+        agent,
+        turn.messages,
+        on_complete=persist_reply,
+        action_proposal_tool=action_proposal_tool,
+    ):
         yield event
 
 
@@ -560,6 +614,7 @@ async def _reply_events(
     inputs: str | list[Msg],
     *,
     on_complete: Callable[[str], Awaitable[None]] | None = None,
+    action_proposal_tool: ActionProposalTool | None = None,
 ) -> AsyncIterator[str]:
     messages: Msg | list[Msg]
     if isinstance(inputs, str):
@@ -597,8 +652,20 @@ async def _reply_events(
                     reply_text = EMPTY_REPLY_FALLBACK
                     text_chunks.append(reply_text)
                     yield _sse("text_delta", {"delta": reply_text})
+                action = (
+                    action_proposal_tool.record
+                    if action_proposal_tool is not None
+                    else None
+                )
+                if action is not None:
+                    appendix = action_summary_markdown(action)
+                    text_chunks.append(appendix)
+                    reply_text = "".join(text_chunks).strip()
+                    yield _sse("text_delta", {"delta": appendix})
                 if on_complete is not None:
                     await on_complete(reply_text)
+                if action is not None:
+                    yield _sse("action_required", action_public_payload(action))
                 reason = getattr(event.finished_reason, "value", str(event.finished_reason))
                 yield _sse("done", {"finished_reason": reason})
     except Exception:

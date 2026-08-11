@@ -23,13 +23,14 @@
 - PostgreSQL 会话/消息持久化、按用户隔离的历史恢复和服务端多轮上下文；
 - 版本化长对话增量摘要、Redis 摘要锁和失败降级，原始消息保持完整；
 - 历史会话侧栏、会话列表、显式新建与模型/Agent 模式独立会话；
-- PostgreSQL HITL Action 状态模型、参数规范化/哈希、本人确认与 CAS 执行占位；
+- PostgreSQL HITL Action、服务端草稿预览、本人确认/拒绝、CAS 执行、幂等键与回读验证；
 - 环境变量模板、非 root/只读 Agent 镜像、PostgreSQL + Redis Docker Compose；
 - PKCE、MCP 响应、工具隔离、意图门控、参数哈希和日志脱敏单元测试。
 
 `POST /api/v1/chat` 已能对查询和巡检请求执行用户专属的模型/工具循环；
-`POST /api/v1/chat/stream` 提供文本与工具状态 SSE。创建或修改草稿的请求仍只返回
-`action_requires_persistent_approval`，聊天接口不会绕过持久化审批直接执行写工具。
+`POST /api/v1/chat/stream` 提供文本、工具状态和待审批 Action SSE。创建或修改草稿时，
+Action Agent 只持有只读 MCP 工具和本地预览工具；ERPNext 写工具仅由批准后的独立执行入口
+使用固定幂等键调用，并在成功后回读确认 `docstatus=0`。
 
 ## 本地配置
 
@@ -93,7 +94,7 @@ http://localhost:8001/
 “登录 ERPNext”完成 OAuth 登录：
 
 - `模型对话`：默认模式，不调用 ERPNext 工具，用于测试模型连接和多轮上下文；
-- `ERPNext Agent`：使用当前登录用户权限执行查询与只读巡检。
+- `ERPNext Agent`：使用当前登录用户权限执行查询、只读巡检和经人工批准的草稿创建/修改。
 
 两种模式分别维护独立 `conversation_id`。浏览器只提交当前消息与会话 ID；历史消息从
 PostgreSQL 加载，并在流式回复完成前落库。刷新页面后，页面先读取会话列表，再恢复该模式
@@ -132,7 +133,7 @@ GET http://localhost:8001/api/v1/auth/login
 | `GET /health/live`, `GET /health/ready` | 可用 |
 | `GET /api/v1/auth/login`, `GET /api/v1/auth/callback` | 已接线并通过真实 ERPNext OAuth/MCP 身份验证 |
 | `GET /api/v1/auth/session`, `POST /api/v1/auth/logout` | 可用 |
-| `POST /api/v1/chat` | 已接入只读 Data/Patrol Agent 运行时 |
+| `POST /api/v1/chat` | Data/Patrol 查询及 Action 草稿预览运行时 |
 | `POST /api/v1/chat/stream` | 已接入 AgentScope 流式 SSE |
 | `POST /api/v1/chat/model/stream` | 已接入 PostgreSQL 历史驱动的无工具模型多轮 SSE |
 | `GET /api/v1/chat/history` | 按当前用户、站点和模式恢复持久化消息 |
@@ -141,7 +142,7 @@ GET http://localhost:8001/api/v1/auth/login
 | `GET /`、`GET /assets/*` | 聊天页面与静态资源 |
 | `GET /api/v1/approvals/{id}` | 已实现本人可见约束 |
 | `POST /api/v1/approvals/{id}/decision` | 已实现本人确认/拒绝与状态锁 |
-| Action 写执行 | 已有 CAS/幂等/回读代码边界，未接入 Chat/API，尚待故障恢复 |
+| `POST /api/v1/approvals/{id}/execute` | 已接入本人批准、CAS、固定幂等键和草稿回读；尚待 EXECUTING 后台恢复 |
 
 模型配置示例：
 

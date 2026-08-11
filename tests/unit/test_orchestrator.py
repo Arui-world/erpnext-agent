@@ -1,6 +1,7 @@
 import pytest
 
 from erpnext_agent.agents.orchestrator import Intent, IntentGate
+from erpnext_agent.api.chat import _fixed_policy_response
 
 
 @pytest.mark.parametrize("message", ["提交销售订单", "删除这个单据", "cancel PO-1"])
@@ -12,6 +13,7 @@ def test_draft_creation_routes_to_action_agent() -> None:
     decision = IntentGate().route("创建一张物料需求草稿")
     assert decision.intent == Intent.ACTION
     assert decision.target_agent == "action_agent"
+    assert _fixed_policy_response(decision, "conversation-1") is None
 
 
 def test_read_routes_to_data_agent() -> None:

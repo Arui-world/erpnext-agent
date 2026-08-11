@@ -717,6 +717,106 @@ textarea:focus-visible {
   font-size: 10px;
 }
 
+.action-card {
+  margin-top: 10px;
+  padding: 13px;
+  border: 1px solid #d8dad3;
+  border-radius: 12px;
+  background: #fffef9;
+  box-shadow: 0 5px 18px rgb(31 35 40 / 5%);
+}
+
+.action-card-header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.action-status {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #6d5a21;
+  background: #f5edcb;
+  font-size: 10px;
+}
+
+.action-status.status-succeeded {
+  color: #225c3f;
+  background: #dcefe4;
+}
+
+.action-status.status-failed,
+.action-status.status-rejected,
+.action-status.status-expired {
+  color: #7c302a;
+  background: #f5dfdc;
+}
+
+.action-id {
+  display: block;
+  margin-top: 7px;
+  color: var(--ink-faint);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.action-preview {
+  max-height: 220px;
+  margin: 10px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7f8f5;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.action-result,
+.action-failure {
+  margin: 9px 0 0;
+  font-size: 12px;
+}
+
+.action-failure {
+  color: #8a302a;
+}
+
+.action-controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.action-button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.action-button.approve {
+  border-color: #2d664c;
+  color: #fff;
+  background: #2d664c;
+}
+
+.action-button.reject {
+  color: #75332e;
+}
+
+.action-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .composer-region {
   z-index: 2;
   width: min(100%, 880px);

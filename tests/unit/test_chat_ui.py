@@ -78,7 +78,13 @@ def test_chat_ui_contains_required_layout_and_local_assets() -> None:
     assert "historyForRequest" not in javascript
     assert 'id="new-conversation-button"' in html
     assert 'id="conversation-list"' in html
+    assert 'class="action-card hidden"' in html
     assert ".conversation-item.active" in css
+    assert ".action-card" in css
+    assert ".action-button.approve" in css
+    assert 'case "action_required"' in javascript
+    assert "/decision" in javascript
+    assert "/execute" in javascript
     assert "SafeMarkdown.renderMarkdown" in javascript
     assert "bubble.innerHTML" not in javascript
     assert "documentRef.createTextNode" in markdown

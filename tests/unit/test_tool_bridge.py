@@ -3,7 +3,12 @@ from typing import Any
 
 import pytest
 from agentscope.message import TextBlock, ToolResultState
-from agentscope.permission import PermissionBehavior, PermissionContext
+from agentscope.permission import (
+    PermissionBehavior,
+    PermissionContext,
+    PermissionDecision,
+)
+from agentscope.tool import ToolBase, ToolChunk
 
 from erpnext_agent.mcp.adapter import MCPBusinessError, MCPEnvelope
 from erpnext_agent.mcp.policy import EXPECTED_TOOLS, READ_TOOLS, WRITE_TOOLS
@@ -53,6 +58,26 @@ class FailingAdapter(FakeAdapter):
             code="PERMISSION_DENIED",
             trace_id="trace-denied",
         )
+
+
+class ProposalStub(ToolBase):
+    name = "erpnext_propose_draft_action"
+    description = "Create a persistent Action preview without writing ERPNext."
+    input_schema: dict[str, Any] = {"type": "object", "properties": {}}
+    is_concurrency_safe = False
+    is_read_only = False
+
+    async def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        context: PermissionContext,
+    ) -> PermissionDecision:
+        del tool_input, context
+        return PermissionDecision(behavior=PermissionBehavior.ALLOW)
+
+    async def call(self, **kwargs: Any) -> ToolChunk:
+        del kwargs
+        return ToolChunk(content=[TextBlock(text="ok")], state=ToolResultState.SUCCESS)
 
 
 def tool_spec(name: str) -> dict[str, Any]:
@@ -146,3 +171,20 @@ async def test_toolkit_factory_physically_separates_write_tools() -> None:
             assert await toolkits.data.get_tool(name) is not None
     for name in EXPECTED_TOOLS:
         assert await toolkits.orchestrator.get_tool(name) is None
+
+
+@pytest.mark.asyncio
+async def test_action_planning_toolkit_replaces_direct_write_tools() -> None:
+    proposal = ProposalStub()
+    toolkits = ERPNextToolkitFactory(FakeAdapter()).build_from_specs(  # type: ignore[arg-type]
+        specs=all_specs(),
+        access_token=TEST_ACCESS_TOKEN,
+        action_proposal_tool=proposal,
+    )
+
+    assert await toolkits.action.get_tool(proposal.name) is not None
+    for name in WRITE_TOOLS:
+        assert await toolkits.action.get_tool(name) is None
+    assert await toolkits.data.get_tool(proposal.name) is None
+    assert await toolkits.patrol.get_tool(proposal.name) is None
+    assert await toolkits.orchestrator.get_tool(proposal.name) is None

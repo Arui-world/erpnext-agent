@@ -46,6 +46,7 @@ class ActionRepository:
         return record
 
     async def claim_execution(self, session: AsyncSession, action_id: str) -> bool:
+        now = datetime.now(UTC)
         result = cast(
             CursorResult[Any],
             await session.execute(
@@ -53,6 +54,7 @@ class ActionRepository:
                 .where(
                     ActionRecord.action_id == action_id,
                     ActionRecord.status == ActionStatus.APPROVED.value,
+                    ActionRecord.expires_at > now,
                 )
                 .values(status=ActionStatus.EXECUTING.value)
             )
@@ -65,7 +67,10 @@ class ActionRepository:
         expires_at = record.expires_at
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=UTC)
-        if record.status == ActionStatus.PENDING.value and expires_at <= current:
+        if record.status in {
+            ActionStatus.PENDING.value,
+            ActionStatus.APPROVED.value,
+        } and expires_at <= current:
             record.status = ActionStatus.EXPIRED.value
             return True
         return False

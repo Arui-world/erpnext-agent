@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from agentscope.agent import Agent
 
+from erpnext_agent.actions.proposal import ActionProposalTool
 from erpnext_agent.agents.factory import AgentBundle, ConfiguredAgentFactory
 from erpnext_agent.agents.orchestrator import Intent
 from erpnext_agent.mcp.adapter import ERPNextMCPAdapter
@@ -20,6 +21,7 @@ class AgentIdentityError(PermissionError):
 class PreparedAgentRuntime:
     bundle: AgentBundle
     erpnext_user: str
+    action_proposal_tool: ActionProposalTool | None = None
 
     def agent_for(self, intent: Intent) -> Agent:
         if intent == Intent.DATA:
@@ -50,6 +52,7 @@ class AgentRuntimeFactory:
         access_token: str,
         expected_user: str,
         tool_caller: MCPToolCaller | None = None,
+        action_proposal_tool: ActionProposalTool | None = None,
     ) -> PreparedAgentRuntime:
         specs = await self._adapter.discover_tools(access_token)
         current_user = await self._adapter.current_user(
@@ -63,6 +66,7 @@ class AgentRuntimeFactory:
             specs=specs,
             access_token=access_token,
             caller=tool_caller,
+            action_proposal_tool=action_proposal_tool,
         )
         bundle = self._agent_factory.build(
             orchestrator_toolkit=toolkits.orchestrator,
@@ -70,4 +74,8 @@ class AgentRuntimeFactory:
             action_toolkit=toolkits.action,
             patrol_toolkit=toolkits.patrol,
         )
-        return PreparedAgentRuntime(bundle=bundle, erpnext_user=current_user)
+        return PreparedAgentRuntime(
+            bundle=bundle,
+            erpnext_user=current_user,
+            action_proposal_tool=action_proposal_tool,
+        )
