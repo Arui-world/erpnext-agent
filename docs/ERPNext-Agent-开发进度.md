@@ -1,7 +1,7 @@
 # ERPNext Agent 开发进度
 
 > 最后更新：2026-08-11
-> 当前阶段：Data Agent 已接入 MCP 物料多仓库存聚合工具
+> 当前阶段：前端已支持安全的 Agent Markdown 预览渲染
 > 进度记录原则：每次开发任务完成后更新本文，记录实际完成内容、验证证据、遗留项和下一步。
 
 ## 一、当前状态
@@ -20,6 +20,8 @@ Compose 启动 FastAPI、PostgreSQL 和 Redis，并具备 OAuth、Session、MCP 
 多轮模型上下文和 OAuth 登录状态展示。浏览器不再上传历史内容，只携带当前消息与
 `conversation_id`；服务端从 PostgreSQL 恢复用户/站点/模式隔离的历史并交给新建 Agent。
 左侧历史侧栏会列出持久化会话，支持切换和创建独立新对话，页面刷新时恢复最近会话。
+助手消息已从 Markdown 源文本显示升级为富文本预览，支持粗体、标题、列表、表格、引用、代码和安全链接；
+流式回复和历史会话采用相同渲染路径。
 
 真实 ERPNext OAuth 用户的库存查询已完成单仓和多仓两条端到端链路。指定精确仓库时使用
 `erpnext_get_stock_balance`；只提供物料时，Data Agent 单次调用
@@ -140,6 +142,16 @@ Chat API 不再使用库存问法正则、专用确定性服务或伪造工具�
 - 不通过通用 Bin 分页查询、不逐仓循环单仓工具、不跨公司/币种汇总库存价值；
 - 新增 `stock_smoke`，可重复验证工具序列、真实回复和 PostgreSQL 会话落库。
 
+### 2.9 Agent Markdown 预览
+
+- 新增无 CDN、无运行时外部依赖的本地 `markdown.js`；
+- 助手消息支持段落、换行、标题、粗体、斜体、删除线、行内/块代码、列表、引用、分隔线和表格；
+- 表格在消息气泡内使用独立横向滚动容器，小屏不会撑破页面；
+- 渲染通过 `createTextNode` 和 `createElement` 构建 DOM，不把模型文本传入 `innerHTML`；
+- 原始 HTML 始终当作普通文本，链接仅允许 HTTP(S)、`mailto:` 和站内相对路径；
+- Markdown 仅用于助手消息，用户消息继续使用 `textContent`；
+- 流式增量和 PostgreSQL 历史恢复都通过同一 `renderMessage()` 预览渲染。
+
 ## 三、验证证据
 
 | 检查项 | 结果 |
@@ -165,7 +177,9 @@ Chat API 不再使用库存问法正则、专用确定性服务或伪造工具�
 | 真实多仓库存 | 返回 `仓库 - rw`：实际 `10.0 Nos`、预计 `10.0 Nos`，未汇总库存价值 |
 | 多仓会话落库 | 通过，会话 `3948e148-6e51-4e9e-a74f-f2ade2f9dd0c` 持久化 user/assistant 两条消息 |
 | 会话列表与新建 | 通过，列表返回 4 条消息计数，新建会话获得独立 UUID |
-| 前端静态资源 | Node 语法检查通过，运行中 HTML/CSS/JS 均包含新版多会话组件 |
+| Markdown 解析与 DOM | Node 测试通过，真实库存回复生成 `strong`、`ul`、`table`、`thead`和 `tbody` |
+| Markdown 安全 | 通过，原始 `<img onerror>` 不生成 `img`，`javascript:`/`data:` 不生成链接 |
+| 前端静态资源 | Node 语法检查通过，运行中 HTML 按 `markdown.js` 再 `app.js` 的顺序加载 |
 | Redis 连接 | 通过 |
 | Agent 容器启动 | 通过，Agent、PostgreSQL、Redis 均为 healthy |
 | `/health/ready` | Redis/Database 为 `ok`，`model_configured` 与 `agent_chat_runtime` 为 `true` |

@@ -39,11 +39,15 @@ def test_chat_ui_contains_required_layout_and_local_assets() -> None:
     html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
     css = (WEB_ROOT / "styles.css").read_text(encoding="utf-8")
     javascript = (WEB_ROOT / "app.js").read_text(encoding="utf-8")
+    markdown = (WEB_ROOT / "markdown.js").read_text(encoding="utf-8")
 
     assert 'id="conversation"' in html
     assert 'id="composer"' in html
     assert 'href="/assets/styles.css"' in html
+    assert 'src="/assets/markdown.js"' in html
     assert ".message-row.user" in css
+    assert ".markdown-table-wrap" in css
+    assert ".markdown-body table" in css
     assert "margin-left: auto" in css
     assert "/chat/model/stream" in javascript
     assert "/chat/stream" in javascript
@@ -54,3 +58,7 @@ def test_chat_ui_contains_required_layout_and_local_assets() -> None:
     assert 'id="new-conversation-button"' in html
     assert 'id="conversation-list"' in html
     assert ".conversation-item.active" in css
+    assert "SafeMarkdown.renderMarkdown" in javascript
+    assert "bubble.innerHTML" not in javascript
+    assert "documentRef.createTextNode" in markdown
+    assert '"javascript:"' not in markdown

@@ -506,6 +506,164 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
+.bubble.markdown-body {
+  white-space: normal;
+}
+
+.markdown-body > :first-child,
+.markdown-body blockquote > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child,
+.markdown-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p {
+  margin: 0 0 12px;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 18px 0 8px;
+  color: var(--ink);
+  font-weight: 680;
+  line-height: 1.35;
+}
+
+.markdown-body h1 {
+  font-size: 20px;
+}
+
+.markdown-body h2 {
+  font-size: 18px;
+}
+
+.markdown-body h3 {
+  font-size: 16px;
+}
+
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  font-size: 14px;
+}
+
+.markdown-body strong {
+  font-weight: 680;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 8px 0 14px;
+  padding-left: 24px;
+}
+
+.markdown-body li {
+  padding-left: 2px;
+}
+
+.markdown-body li + li {
+  margin-top: 3px;
+}
+
+.markdown-body code {
+  padding: 2px 5px;
+  border: 1px solid #e2e3de;
+  border-radius: 5px;
+  color: #37413b;
+  background: #f4f5f1;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.88em;
+}
+
+.markdown-body pre {
+  margin: 10px 0 14px;
+  padding: 13px 14px;
+  overflow-x: auto;
+  border: 1px solid #303431;
+  border-radius: 10px;
+  background: #252825;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  border: 0;
+  color: #f1f3ef;
+  background: transparent;
+  font-size: 12px;
+  white-space: pre;
+}
+
+.markdown-body blockquote {
+  margin: 10px 0 14px;
+  padding: 8px 12px;
+  border-left: 3px solid #a4aaa3;
+  color: var(--ink-soft);
+  background: #f7f8f5;
+}
+
+.markdown-body hr {
+  height: 1px;
+  margin: 16px 0;
+  border: 0;
+  background: var(--line);
+}
+
+.markdown-body a {
+  color: #236648;
+  text-decoration: underline;
+  text-decoration-color: rgb(35 102 72 / 35%);
+  text-underline-offset: 2px;
+}
+
+.markdown-table-wrap {
+  max-width: 100%;
+  margin: 10px 0 15px;
+  overflow-x: auto;
+  border: 1px solid #dcddd8;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.markdown-body table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 9px 11px;
+  border-right: 1px solid #e4e5e0;
+  border-bottom: 1px solid #e4e5e0;
+  vertical-align: top;
+  white-space: normal;
+}
+
+.markdown-body th {
+  color: #454a46;
+  background: #f4f5f1;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.markdown-body tr:last-child td {
+  border-bottom: 0;
+}
+
+.markdown-body th:last-child,
+.markdown-body td:last-child {
+  border-right: 0;
+}
+
 .message-row.user .bubble {
   border-color: #282b29;
   border-radius: 17px 6px 17px 17px;

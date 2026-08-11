@@ -148,9 +148,19 @@ function renderMessage(message) {
 
   const bubble = message.node.querySelector(".bubble");
   bubble.classList.toggle("pending", message.pending && Boolean(message.content));
+  bubble.classList.toggle("markdown-body", message.role === "assistant");
   if (message.pending && !message.content) {
-    bubble.innerHTML =
-      '<span class="typing-dots" aria-label="正在生成"><span></span><span></span><span></span></span>';
+    const typing = document.createElement("span");
+    typing.className = "typing-dots";
+    typing.setAttribute("aria-label", "正在生成");
+    typing.append(
+      document.createElement("span"),
+      document.createElement("span"),
+      document.createElement("span"),
+    );
+    bubble.replaceChildren(typing);
+  } else if (message.role === "assistant") {
+    window.SafeMarkdown.renderMarkdown(bubble, message.content);
   } else {
     bubble.textContent = message.content;
   }
