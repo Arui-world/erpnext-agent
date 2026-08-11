@@ -180,6 +180,14 @@ Agent 容器部署新镜像。Administrator token 真实轮换和单次真实模
 - 模型调用时使用“系统生成摘要 + 最近消息”，原始 `chat_messages` 完整保留；
 - 摘要生成失败时回滚并降级为最近消息，不阻断当前对话。
 
+### 2.12 Agent 运行机制与 Workflow 文档
+
+- 新增 `2026-08-11-Agent运行机制与Workflow说明.md`，以当前代码而非未来设计为准；
+- 绘制整体架构、OAuth 登录、Chat 主链、Token 刷新和长对话摘要 Workflow；
+- 说明每请求 Agent/Toolkit、确定性 `IntentGate`、AgentScope ReAct 和 MCP 四层检查的边界；
+- 区分 Data/Patrol 已运行主链与 Action/Orchestrator 尚未接入的真实状态；
+- 补充状态存储、SSE 事件、关键失败路径、API 地图和建议代码阅读顺序。
+
 ## 三、验证证据
 
 | 检查项 | 结果 |

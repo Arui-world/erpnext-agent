@@ -4,12 +4,16 @@
 技术基线固定为 Python 3.12、`agentscope==2.0.5`、FastAPI、PostgreSQL、Redis，以及现有的
 ERPNext MCP endpoint。
 
+要从当前代码理解完整请求链、Agent 分工、Token 刷新、MCP 调用和长对话摘要，请阅读
+[`Agent 运行机制与 Workflow 说明`](docs/2026-08-11-Agent运行机制与Workflow说明.md)。
+
 ## 当前已经实现
 
 - FastAPI 应用生命周期、存活/就绪检查和安全响应头；
 - OAuth 2.0 Authorization Code + PKCE 登录入口与回调；
 - OAuth Profile 与 `erpnext_get_current_user` 的身份一致性校验；
 - 加密 OAuth token 持久化，以及 Redis 不透明 Session/一次性 OAuth state；
+- OAuth token 到期前自动刷新、Redis single-flight 与 MCP 401/403 后单次重试；
 - MCP HTTP、JSON-RPC、`isError`、`structuredContent.ok` 四层失败归一化；
 - Data、Action、Patrol、Orchestrator 的代码级工具白名单；
 - AgentScope 2.0.5 Agent/MCP Client 构造边界；
@@ -20,6 +24,7 @@ ERPNext MCP endpoint。
 - 受 Session/CSRF 保护的真实 Agent 回复与 `reply_stream()` SSE；
 - Codex 风格响应式聊天页面，支持模型对话与 ERPNext Agent 两种模式；
 - PostgreSQL 会话/消息持久化、按用户隔离的历史恢复和服务端多轮上下文；
+- 版本化长对话增量摘要、Redis 摘要锁和失败降级，原始消息保持完整；
 - 历史会话侧栏、会话列表、显式新建与模型/Agent 模式独立会话；
 - PostgreSQL HITL Action 状态模型、参数规范化/哈希、本人确认与 CAS 执行占位；
 - 环境变量模板、非 root/只读 Agent 镜像、PostgreSQL + Redis Docker Compose；
@@ -113,11 +118,11 @@ GET http://localhost:8001/api/v1/auth/login
 |---|---|---|
 | 基础设施 | `DATABASE_URL`, `REDIS_URL` | Action/token/聊天记录与 Session/state 存储 |
 | ERPNext | `ERPNEXT_BASE_URL`, `ERPNEXT_INTERNAL_URL`, `ERPNEXT_MCP_URL`, `ERPNEXT_SITE` | 浏览器地址、容器内地址与 MCP endpoint |
-| OAuth | `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URI` | 每环境独立 OAuth Client |
+| OAuth | `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URI`, `OAUTH_REFRESH_*` | 每环境独立 OAuth Client 与刷新策略 |
 | 会话 | `SESSION_SECRET`, `SESSION_COOKIE_*`, `SESSION_TTL_SECONDS` | Agent 浏览器会话 |
 | 加密 | `TOKEN_ENCRYPTION_KEY`, `TOKEN_ENCRYPTION_KEY_VERSION` | OAuth token 信封加密入口 |
 | 模型 | `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_API_KEY`, `MODEL_BASE_URL` | AgentScope Model Factory |
-| 记忆 | `CHAT_HISTORY_MAX_MESSAGES`, `CHAT_HISTORY_MAX_CHARS`, `CHAT_HISTORY_DISPLAY_LIMIT` | 模型上下文与页面历史上限 |
+| 记忆 | `CHAT_HISTORY_*`, `CHAT_SUMMARY_*` | 模型上下文、页面历史和自动摘要策略 |
 | 观测 | `OTEL_*` | 下一阶段 OpenTelemetry exporter |
 
 完整默认值与说明见 [`.env.example`](.env.example)。生产环境必须使用 HTTPS、Secure Cookie、
@@ -128,7 +133,7 @@ GET http://localhost:8001/api/v1/auth/login
 | 路径 | 状态 |
 |---|---|
 | `GET /health/live`, `GET /health/ready` | 可用 |
-| `GET /api/v1/auth/login`, `GET /api/v1/auth/callback` | 已接线，需真实 ERPNext OAuth 验证 |
+| `GET /api/v1/auth/login`, `GET /api/v1/auth/callback` | 已接线并通过真实 ERPNext OAuth/MCP 身份验证 |
 | `GET /api/v1/auth/session`, `POST /api/v1/auth/logout` | 可用 |
 | `POST /api/v1/chat` | 已接入只读 Data/Patrol Agent 运行时 |
 | `POST /api/v1/chat/stream` | 已接入 AgentScope 流式 SSE |
@@ -139,7 +144,7 @@ GET http://localhost:8001/api/v1/auth/login
 | `GET /`、`GET /assets/*` | 聊天页面与静态资源 |
 | `GET /api/v1/approvals/{id}` | 已实现本人可见约束 |
 | `POST /api/v1/approvals/{id}/decision` | 已实现本人确认/拒绝与状态锁 |
-| Action 写执行 | 未对外开放，待补齐回读验证和故障恢复 |
+| Action 写执行 | 已有 CAS/幂等/回读代码边界，未接入 Chat/API，尚待故障恢复 |
 
 模型配置示例：
 
