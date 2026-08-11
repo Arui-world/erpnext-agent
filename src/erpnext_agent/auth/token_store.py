@@ -92,6 +92,31 @@ class TokenStore:
         )
         if record is None:
             raise CredentialNotFoundError(credential_id)
+        return self._stored_credential(record)
+
+    async def get_for_user(
+        self,
+        session: AsyncSession,
+        *,
+        site: str,
+        user_id: str,
+    ) -> StoredCredential:
+        """Resolve the encrypted credential for a persisted Action owner."""
+
+        record = await session.scalar(
+            select(OAuthCredentialRecord)
+            .where(
+                OAuthCredentialRecord.site == site,
+                OAuthCredentialRecord.user_id == user_id,
+                OAuthCredentialRecord.client_id == self._client_id,
+            )
+            .execution_options(populate_existing=True)
+        )
+        if record is None:
+            raise CredentialNotFoundError(f"{site}:{user_id}")
+        return self._stored_credential(record)
+
+    def _stored_credential(self, record: OAuthCredentialRecord) -> StoredCredential:
         return StoredCredential(
             credential_id=record.credential_id,
             site=record.site,

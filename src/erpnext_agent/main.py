@@ -15,6 +15,8 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from erpnext_agent import __version__
+from erpnext_agent.actions.recovery import ActionRecoveryWorker
+from erpnext_agent.actions.repository import ActionRepository
 from erpnext_agent.agents.factory import ConfiguredAgentFactory
 from erpnext_agent.agents.runtime import AgentRuntimeFactory
 from erpnext_agent.api import approvals, auth, chat, health
@@ -98,9 +100,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if resolved.auto_create_schema:
             await create_schema(engine)
+        app.state.action_recovery_worker = ActionRecoveryWorker(
+            enabled=resolved.action_recovery_enabled,
+            session_factory=session_factory,
+            redis=redis,
+            repository=ActionRepository(),
+            token_store=app.state.token_store,
+            refresh_service=app.state.token_refresh_service,
+            session_store=app.state.session_store,
+            adapter=app.state.mcp_adapter,
+            poll_seconds=resolved.action_recovery_poll_seconds,
+            retry_seconds=resolved.action_recovery_retry_seconds,
+            batch_size=resolved.action_recovery_batch_size,
+            execution_lock_ttl_seconds=resolved.action_execution_lock_ttl_seconds,
+        )
+        app.state.action_recovery_worker.start()
         try:
             yield
         finally:
+            await app.state.action_recovery_worker.stop()
             await http.aclose()
             await redis.aclose()
             await engine.dispose()

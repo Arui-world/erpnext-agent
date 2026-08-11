@@ -6,7 +6,9 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from erpnext_agent.actions.coordination import acquire_action_execution_lease
 from erpnext_agent.actions.executor import ActionExecutor
 from erpnext_agent.actions.gateway import ActionGateway
 from erpnext_agent.actions.models import ActionStatus
@@ -119,42 +121,57 @@ async def execute_action(
     except ActionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Action not found") from exc
 
-    if repository.expire_if_needed(record):
-        await db.commit()
-        raise HTTPException(status_code=409, detail="Action approval has expired")
+    await _validate_executable_action(repository, record, session.user_id, db)
     if record.status == ActionStatus.SUCCEEDED.value:
         return _view(record)
-    if record.status not in {
-        ActionStatus.APPROVED.value,
-        ActionStatus.EXECUTING.value,
-    }:
+
+    try:
+        execution_lease = await acquire_action_execution_lease(
+            request.app.state.redis,
+            action_id=action_id,
+            ttl_seconds=request.app.state.settings.action_execution_lock_ttl_seconds,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "ACTION_COORDINATION_UNAVAILABLE",
+                "message": "Action execution coordination is unavailable",
+            },
+        ) from exc
+    if execution_lease is None:
         raise HTTPException(
             status_code=409,
-            detail=f"Action cannot execute from status {record.status}",
+            detail={
+                "code": "ACTION_EXECUTION_BUSY",
+                "message": "This Action is already being executed or reconciled",
+            },
         )
-    if record.decided_by != session.user_id:
-        raise HTTPException(status_code=403, detail="Action decision identity mismatch")
 
-    refresh_service: TokenRefreshService = request.app.state.token_refresh_service
-    session_store: SessionStore = request.app.state.session_store
     try:
+        # Re-read after obtaining the distributed lock. Another instance may have
+        # completed the Action between the first ownership check and lock acquisition.
+        record = await repository.get_for_user(
+            db,
+            action_id=action_id,
+            site=session.site,
+            user_id=session.user_id,
+        )
+        await _validate_executable_action(repository, record, session.user_id, db)
+        if record.status == ActionStatus.SUCCEEDED.value:
+            return _view(record)
+
+        refresh_service: TokenRefreshService = request.app.state.token_refresh_service
+        session_store: SessionStore = request.app.state.session_store
         credential = await refresh_service.get_valid(db, session.credential_id)
-    except TokenRefreshError as exc:
-        await session_store.delete(session.session_id)
-        raise HTTPException(
-            status_code=401,
-            detail={"code": "REAUTHENTICATION_REQUIRED", "message": str(exc)},
-        ) from exc
-
-    caller = RefreshingMCPCaller(
-        adapter=request.app.state.mcp_adapter,
-        refresh_service=refresh_service,
-        db=db,
-        credential=credential,
-        session_store=session_store,
-        agent_session_id=session.session_id,
-    )
-    try:
+        caller = RefreshingMCPCaller(
+            adapter=request.app.state.mcp_adapter,
+            refresh_service=refresh_service,
+            db=db,
+            credential=credential,
+            session_store=session_store,
+            agent_session_id=session.session_id,
+        )
         identity = await caller.call_tool(
             access_token=credential.access_token,
             name="erpnext_get_current_user",
@@ -184,6 +201,12 @@ async def execute_action(
                 action=record,
                 access_token=credential.access_token,
             )
+    except TokenRefreshError as exc:
+        await request.app.state.session_store.delete(session.session_id)
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "REAUTHENTICATION_REQUIRED", "message": str(exc)},
+        ) from exc
     except HTTPException:
         raise
     except MCPBusinessError as exc:
@@ -204,4 +227,29 @@ async def execute_action(
         ) from exc
     except ActionStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        await execution_lease.release()
     return _view(record)
+
+
+async def _validate_executable_action(
+    repository: ActionRepository,
+    record: Any,
+    user_id: str,
+    db: AsyncSession,
+) -> None:
+    if repository.expire_if_needed(record):
+        await db.commit()
+        raise HTTPException(status_code=409, detail="Action approval has expired")
+    if record.status == ActionStatus.SUCCEEDED.value:
+        return
+    if record.status not in {
+        ActionStatus.APPROVED.value,
+        ActionStatus.EXECUTING.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Action cannot execute from status {record.status}",
+        )
+    if record.decided_by != user_id:
+        raise HTTPException(status_code=403, detail="Action decision identity mismatch")

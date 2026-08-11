@@ -31,6 +31,10 @@ async def ready(request: Request, response: Response) -> dict[str, Any]:
     except Exception:
         checks["database"] = "error"
 
+    recovery_worker = request.app.state.action_recovery_worker
+    if recovery_worker.enabled:
+        checks["action_recovery"] = "ok" if recovery_worker.running else "error"
+
     healthy = all(value == "ok" for value in checks.values())
     if not healthy:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -42,6 +46,9 @@ async def ready(request: Request, response: Response) -> dict[str, Any]:
             "oauth_auto_refresh": True,
             "approval_persistence": True,
             "action_approval_execution": True,
+            "action_recovery_worker": (
+                recovery_worker.enabled and recovery_worker.running
+            ),
             "conversation_auto_summary": request.app.state.settings.chat_summary_enabled,
             "model_configured": model_configuration_is_complete(request.app.state.settings),
             "agent_chat_runtime": model_configuration_is_complete(

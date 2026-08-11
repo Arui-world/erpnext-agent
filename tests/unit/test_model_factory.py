@@ -104,3 +104,22 @@ def test_invalid_summary_message_window_fails_configuration(
             CHAT_SUMMARY_TRIGGER_MESSAGES="8",
             CHAT_SUMMARY_KEEP_RECENT_MESSAGES="8",
         )
+
+
+def test_action_recovery_configuration_fails_for_unsafe_timing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="ACTION_RECOVERY_RETRY_SECONDS"):
+        settings_from_environment(
+            monkeypatch,
+            ACTION_RECOVERY_POLL_SECONDS="60",
+            ACTION_RECOVERY_RETRY_SECONDS="30",
+        )
+
+    with pytest.raises(ValueError, match="ACTION_EXECUTION_LOCK_TTL_SECONDS"):
+        settings_from_environment(
+            monkeypatch,
+            ACTION_RECOVERY_POLL_SECONDS="15",
+            ACTION_RECOVERY_RETRY_SECONDS="60",
+            ACTION_EXECUTION_LOCK_TTL_SECONDS="60",
+        )

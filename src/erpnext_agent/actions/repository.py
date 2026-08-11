@@ -37,13 +37,43 @@ class ActionRepository:
             ActionRecord.action_id == action_id,
             ActionRecord.site == site,
             ActionRecord.requested_by == user_id,
-        )
+        ).execution_options(populate_existing=True)
         if for_update:
             query = query.with_for_update()
         record = await session.scalar(query)
         if record is None:
             raise ActionNotFoundError(action_id)
         return record
+
+    async def get_executing(
+        self,
+        session: AsyncSession,
+        *,
+        action_id: str,
+    ) -> ActionRecord:
+        record = await session.scalar(
+            select(ActionRecord).where(
+                ActionRecord.action_id == action_id,
+                ActionRecord.status == ActionStatus.EXECUTING.value,
+            )
+        )
+        if record is None:
+            raise ActionNotFoundError(action_id)
+        return record
+
+    async def list_executing_ids(
+        self,
+        session: AsyncSession,
+        *,
+        limit: int,
+    ) -> list[str]:
+        result = await session.scalars(
+            select(ActionRecord.action_id)
+            .where(ActionRecord.status == ActionStatus.EXECUTING.value)
+            .order_by(ActionRecord.created_at, ActionRecord.action_id)
+            .limit(limit)
+        )
+        return list(result)
 
     async def claim_execution(self, session: AsyncSession, action_id: str) -> bool:
         now = datetime.now(UTC)

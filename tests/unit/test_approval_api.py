@@ -97,6 +97,39 @@ class FakeSessionStore:
         self.deleted.append(session_id)
 
 
+class FakeRedis:
+    def __init__(self, *, busy: bool = False) -> None:
+        self.busy = busy
+        self.values: dict[str, str] = {}
+
+    async def set(
+        self,
+        name: str,
+        value: str,
+        *,
+        ex: int,
+        nx: bool,
+    ) -> bool | None:
+        del ex
+        if self.busy or (nx and name in self.values):
+            return None
+        self.values[name] = value
+        return True
+
+    async def eval(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: str,
+    ) -> int:
+        del script, numkeys
+        key, owner = keys_and_args
+        if self.values.get(key) != owner:
+            return 0
+        del self.values[key]
+        return 1
+
+
 class FakeAdapter:
     def __init__(self, user_id: str) -> None:
         self.user_id = user_id
@@ -166,12 +199,18 @@ def approved_action(user_id: str = "user@example.com") -> ActionRecord:
     )
 
 
-def request_with_runtime(user_id: str) -> tuple[Request, FakeAdapter]:
+def request_with_runtime(
+    user_id: str,
+    *,
+    execution_busy: bool = False,
+) -> tuple[Request, FakeAdapter]:
     adapter = FakeAdapter(user_id)
     state = SimpleNamespace(
         token_refresh_service=FakeRefreshService(user_id),
         session_store=FakeSessionStore(),
         mcp_adapter=adapter,
+        redis=FakeRedis(busy=execution_busy),
+        settings=SimpleNamespace(action_execution_lock_ttl_seconds=300),
     )
     request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=state)))
     return request, adapter
@@ -263,3 +302,25 @@ async def test_execute_api_reconciles_existing_executing_action(
         "erpnext_create_draft",
         "erpnext_get_doc",
     ]
+
+
+@pytest.mark.asyncio
+async def test_execute_api_returns_busy_without_calling_mcp_when_lock_is_held(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = approved_action()
+    repository = OwnedActionRepository(record)
+    monkeypatch.setattr(approvals, "ActionRepository", lambda: repository)
+    request, adapter = request_with_runtime(record.requested_by, execution_busy=True)
+
+    with pytest.raises(HTTPException) as caught:
+        await approvals.execute_action(
+            record.action_id,
+            request,
+            agent_session(record.requested_by),
+            cast(AsyncSession, FakeDB()),
+        )
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "ACTION_EXECUTION_BUSY"
+    assert adapter.calls == []

@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     token_encryption_key_version: str = "v1"  # noqa: S105 - identifier, not a secret
 
     action_ttl_seconds: int = Field(default=900, ge=60, le=86_400)
+    action_recovery_enabled: bool = True
+    action_recovery_poll_seconds: int = Field(default=15, ge=1, le=3600)
+    action_recovery_retry_seconds: int = Field(default=60, ge=5, le=86_400)
+    action_recovery_batch_size: int = Field(default=20, ge=1, le=200)
+    action_execution_lock_ttl_seconds: int = Field(default=300, ge=30, le=3600)
 
     chat_history_max_messages: int = Field(default=20, ge=2, le=100)
     chat_history_max_chars: int = Field(default=24_000, ge=4_000, le=100_000)
@@ -130,6 +135,19 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_environment_safety(self) -> Settings:
+        if self.action_recovery_retry_seconds < self.action_recovery_poll_seconds:
+            raise ValueError(
+                "ACTION_RECOVERY_RETRY_SECONDS must be greater than or equal to "
+                "ACTION_RECOVERY_POLL_SECONDS"
+            )
+        minimum_execution_lease = (
+            (6 * self.mcp_http_timeout_seconds) + self.oauth_refresh_wait_seconds + 5
+        )
+        if self.action_execution_lock_ttl_seconds < minimum_execution_lease:
+            raise ValueError(
+                "ACTION_EXECUTION_LOCK_TTL_SECONDS is too short for the configured "
+                "MCP and OAuth timeouts"
+            )
         if self.chat_summary_keep_recent_messages >= self.chat_summary_trigger_messages:
             raise ValueError(
                 "CHAT_SUMMARY_KEEP_RECENT_MESSAGES must be less than "
