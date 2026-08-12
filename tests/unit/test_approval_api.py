@@ -41,6 +41,7 @@ class OwnedActionRepository:
         action_id: str,
         site: str,
         user_id: str,
+        session_id: str,
         for_update: bool = False,
     ) -> ActionRecord:
         del session, for_update
@@ -48,6 +49,7 @@ class OwnedActionRepository:
             action_id != self.record.action_id
             or site != self.record.site
             or user_id != self.record.requested_by
+            or session_id != self.record.session_id
         ):
             raise ActionNotFoundError(action_id)
         return self.record
@@ -65,6 +67,7 @@ class OwnedActionRepository:
         *,
         site: str,
         user_id: str,
+        session_id: str,
         conversation_id: str,
         limit: int,
     ) -> list[ActionRecord]:
@@ -72,6 +75,7 @@ class OwnedActionRepository:
         self.list_scope = {
             "site": site,
             "user_id": user_id,
+            "session_id": session_id,
             "conversation_id": conversation_id,
             "limit": limit,
         }
@@ -95,6 +99,7 @@ class FakeRefreshService:
         now = datetime.now(UTC)
         self.credential = StoredCredential(
             credential_id="credential-1",
+            binding_id="00000000-0000-0000-0000-000000000020",
             site="dev.localhost",
             oauth_subject=user_id,
             user_id=user_id,
@@ -250,6 +255,7 @@ def agent_session(user_id: str = "user@example.com") -> AgentSession:
     return AgentSession(
         session_id="session-1",
         credential_id="credential-1",
+        binding_id="00000000-0000-0000-0000-000000000020",
         site="dev.localhost",
         user_id=user_id,
         csrf_token="csrf-token",  # noqa: S106
@@ -287,6 +293,7 @@ async def test_list_conversation_actions_is_scoped_and_includes_terminal_status(
     assert repository.list_scope == {
         "site": "dev.localhost",
         "user_id": record.requested_by,
+        "session_id": "session-1",
         "conversation_id": str(conversation_id),
         "limit": 25,
     }

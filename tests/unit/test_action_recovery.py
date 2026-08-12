@@ -10,6 +10,7 @@ from erpnext_agent.actions.gateway import canonicalize_arguments
 from erpnext_agent.actions.models import ActionRecord, ActionStatus
 from erpnext_agent.actions.recovery import ActionRecoveryWorker
 from erpnext_agent.actions.repository import ActionNotFoundError
+from erpnext_agent.auth.session_store import AgentSession
 from erpnext_agent.auth.token_store import StoredCredential
 from erpnext_agent.mcp.adapter import MCPEnvelope, MCPTransportError
 
@@ -106,8 +107,20 @@ class FakeRedis:
 
 
 class FakeSessionStore:
-    def __init__(self) -> None:
+    def __init__(self, credential: StoredCredential) -> None:
         self.deleted: list[str] = []
+        self.session = AgentSession(
+            session_id="agent-session-1",
+            credential_id=credential.credential_id,
+            binding_id=credential.binding_id,
+            site=credential.site,
+            user_id=credential.user_id,
+            csrf_token="csrf-token",  # noqa: S106
+            created_at=datetime.now(UTC).isoformat(),
+        )
+
+    async def get(self, session_id: str) -> AgentSession | None:
+        return self.session if session_id == self.session.session_id else None
 
     async def delete(self, session_id: str) -> None:
         self.deleted.append(session_id)
@@ -117,16 +130,13 @@ class FakeTokenStore:
     def __init__(self, credential: StoredCredential) -> None:
         self.credential = credential
 
-    async def get_for_user(
+    async def get(
         self,
         session: AsyncSession,
-        *,
-        site: str,
-        user_id: str,
+        credential_id: str,
     ) -> StoredCredential:
         del session
-        assert site == self.credential.site
-        assert user_id == self.credential.user_id
+        assert credential_id == self.credential.credential_id
         return self.credential
 
 
@@ -231,6 +241,7 @@ def executing_action() -> ActionRecord:
 def stored_credential() -> StoredCredential:
     return StoredCredential(
         credential_id="credential-1",
+        binding_id="00000000-0000-0000-0000-000000000030",
         site="dev.localhost",
         oauth_subject="user@example.com",
         user_id="user@example.com",
@@ -249,7 +260,7 @@ def build_worker(
 ) -> tuple[ActionRecoveryWorker, FakeRedis, FakeSessionStore]:
     credential = stored_credential()
     redis = FakeRedis()
-    session_store = FakeSessionStore()
+    session_store = FakeSessionStore(credential)
     worker = ActionRecoveryWorker(
         enabled=True,
         session_factory=cast(Any, FakeSessionFactory()),

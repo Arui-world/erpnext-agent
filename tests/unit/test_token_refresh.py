@@ -82,21 +82,15 @@ class FakeTokenStore:
             raise AssertionError("unexpected credential")
         return self.credential
 
-    async def upsert(
+    async def replace_tokens(
         self,
         session: AsyncSession,
         *,
-        site: str,
-        oauth_subject: str,
-        user_id: str,
+        credential_id: str,
         token: OAuthTokenSet,
-    ) -> str:
+    ) -> None:
         del session
-        assert (site, oauth_subject, user_id) == (
-            self.credential.site,
-            self.credential.oauth_subject,
-            self.credential.user_id,
-        )
+        assert credential_id == self.credential.credential_id
         self.credential = replace(
             self.credential,
             access_token=token.access_token,
@@ -105,7 +99,6 @@ class FakeTokenStore:
             expires_at=datetime.now(UTC) + timedelta(seconds=token.expires_in or 0),
             updated_at=self.credential.updated_at + timedelta(seconds=1),
         )
-        return self.credential.credential_id
 
 
 class FakeOAuth:
@@ -138,6 +131,7 @@ def credential(
     now = datetime.now(UTC)
     return StoredCredential(
         credential_id="credential-id",
+        binding_id="00000000-0000-0000-0000-000000000010",
         site="dev.localhost",
         oauth_subject="Administrator",
         user_id="Administrator",

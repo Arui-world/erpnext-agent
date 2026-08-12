@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     oauth_refresh_lock_ttl_seconds: int = Field(default=60, ge=10, le=300)
     oauth_refresh_wait_seconds: float = Field(default=25.0, gt=0, le=120)
     oauth_refresh_poll_seconds: float = Field(default=0.1, gt=0, le=2)
+    oauth_introspection_cache_seconds: int = Field(default=5, ge=0, le=60)
+    oauth_logout_event_max_skew_seconds: int = Field(default=60, ge=10, le=600)
+    oauth_logout_event_replay_ttl_seconds: int = Field(default=86_400, ge=300, le=604_800)
+    erp_logout_webhook_secret: SecretStr | None = None
 
     session_cookie_name: str = "erpnext_agent_session"
     session_cookie_secure: bool = False
@@ -134,6 +138,13 @@ class Settings(BaseSettings):
             raise ValueError("TOKEN_ENCRYPTION_KEY must be a valid Fernet key") from exc
         return value
 
+    @field_validator("erp_logout_webhook_secret")
+    @classmethod
+    def validate_logout_webhook_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and len(value.get_secret_value()) < 32:
+            raise ValueError("ERP_LOGOUT_WEBHOOK_SECRET must contain at least 32 characters")
+        return value
+
     @model_validator(mode="after")
     def validate_environment_safety(self) -> Settings:
         if self.action_recovery_retry_seconds < self.action_recovery_poll_seconds:
@@ -167,6 +178,8 @@ class Settings(BaseSettings):
                 raise ValueError("OAUTH_REDIRECT_URI must use HTTPS in production")
             if self.auto_create_schema:
                 raise ValueError("AUTO_CREATE_SCHEMA must be false in production")
+            if self.erp_logout_webhook_secret is None:
+                raise ValueError("ERP_LOGOUT_WEBHOOK_SECRET is required in production")
         return self
 
     @property

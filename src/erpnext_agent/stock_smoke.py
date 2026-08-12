@@ -145,6 +145,7 @@ async def run_smoke() -> dict[str, Any]:
     )
     session = await store.create(
         credential_id=credential_id,
+        binding_id="00000000-0000-0000-0000-000000000003",
         site=settings.erpnext_site,
         user_id=user_id,
     )

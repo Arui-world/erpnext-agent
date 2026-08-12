@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import secrets
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, HTTPException, Query, Request, Response, status
@@ -15,6 +17,7 @@ from erpnext_agent.mcp.adapter import MCPError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 OAUTH_ATTEMPT_COOKIE = "erpnext_agent_oauth_attempt"
+logger = logging.getLogger(__name__)
 
 
 def _safe_return_to(value: str) -> str:
@@ -37,6 +40,7 @@ async def login(
     oauth: OAuthClient = request.app.state.oauth_client
     state_store: OAuthStateStore = request.app.state.oauth_state_store
     pkce = create_pkce_request()
+    binding_id = str(uuid.uuid4())
     attempt = secrets.token_urlsafe(32)
     await state_store.put(
         pkce.state,
@@ -45,9 +49,13 @@ async def login(
             nonce=pkce.nonce,
             attempt_hash=hash_attempt_cookie(attempt),
             return_to=_safe_return_to(return_to),
+            binding_id=binding_id,
         ),
     )
-    response = RedirectResponse(oauth.authorization_url(pkce), status_code=status.HTTP_302_FOUND)
+    response = RedirectResponse(
+        oauth.authorization_url(pkce, binding_id=binding_id),
+        status_code=status.HTTP_302_FOUND,
+    )
     response.set_cookie(
         OAUTH_ATTEMPT_COOKIE,
         attempt,
@@ -80,11 +88,13 @@ async def callback(
     ):
         raise HTTPException(status_code=400, detail="OAuth state is invalid or expired")
 
+    issued_access_token: str | None = None
     try:
         token = await request.app.state.oauth_client.exchange_code(
             code=code,
             verifier=stored_state.verifier,
         )
+        issued_access_token = token.access_token
         raw_profile = await request.app.state.oauth_client.fetch_profile(token.access_token)
         profile = _profile_data(raw_profile)
         frappe_user = await request.app.state.oauth_client.fetch_logged_user(
@@ -96,12 +106,28 @@ async def callback(
         mcp_user = await request.app.state.mcp_adapter.current_user(token.access_token)
         if not secrets.compare_digest(frappe_user.casefold(), mcp_user.casefold()):
             raise OAuthError("OAuth and MCP identities do not match")
+        binding = await request.app.state.oauth_client.confirm_binding(
+            token.access_token,
+            binding_id=stored_state.binding_id,
+        )
+        if not secrets.compare_digest(binding.binding_id, stored_state.binding_id):
+            raise OAuthError("ERPNext returned a different browser binding")
+        if not secrets.compare_digest(binding.user.casefold(), mcp_user.casefold()):
+            raise OAuthError("OAuth and browser binding identities do not match")
+        if not secrets.compare_digest(binding.client_id, settings.oauth_client_id):
+            raise OAuthError("OAuth browser binding belongs to a different client")
     except (OAuthError, MCPError) as exc:
+        if issued_access_token is not None:
+            try:
+                await request.app.state.oauth_client.revoke(issued_access_token)
+            except OAuthError:
+                logger.warning("Unable to revoke an OAuth token after binding failure")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     token_store: TokenStore = request.app.state.token_store
-    credential_id = await token_store.upsert(
+    credential_id = await token_store.create(
         db,
+        binding_id=stored_state.binding_id,
         site=settings.erpnext_site,
         oauth_subject=oauth_subject,
         user_id=mcp_user,
@@ -110,6 +136,7 @@ async def callback(
     await db.commit()
     agent_session = await request.app.state.session_store.create(
         credential_id=credential_id,
+        binding_id=stored_state.binding_id,
         site=settings.erpnext_site,
         user_id=mcp_user,
     )
@@ -158,6 +185,6 @@ async def logout(
         await token_store.revoke(db, session.credential_id)
     except CredentialNotFoundError:
         pass
-    await request.app.state.session_store.delete(session.session_id)
+    await request.app.state.session_store.delete_by_binding(session.binding_id)
     response.delete_cookie(settings.session_cookie_name, path="/")
     return {"logged_out": True, "revocation_pending": revocation_pending}

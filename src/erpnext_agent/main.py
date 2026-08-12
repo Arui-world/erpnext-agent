@@ -19,7 +19,8 @@ from erpnext_agent.actions.recovery import ActionRecoveryWorker
 from erpnext_agent.actions.repository import ActionRepository
 from erpnext_agent.agents.factory import ConfiguredAgentFactory
 from erpnext_agent.agents.runtime import AgentRuntimeFactory
-from erpnext_agent.api import approvals, auth, chat, health
+from erpnext_agent.api import approvals, auth, backchannel, chat, health
+from erpnext_agent.auth.authorization import AuthorizationService
 from erpnext_agent.auth.oauth_client import OAuthClient
 from erpnext_agent.auth.session_store import OAuthStateStore, SessionStore
 from erpnext_agent.auth.token_refresh import TokenRefreshService
@@ -73,6 +74,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             lock_ttl_seconds=resolved.oauth_refresh_lock_ttl_seconds,
             wait_seconds=resolved.oauth_refresh_wait_seconds,
             poll_seconds=resolved.oauth_refresh_poll_seconds,
+        )
+        app.state.authorization_service = AuthorizationService(
+            oauth=app.state.oauth_client,
+            refresh=app.state.token_refresh_service,
+            token_store=app.state.token_store,
+            session_store=app.state.session_store,
+            redis=redis,
+            client_id=resolved.oauth_client_id,
+            cache_seconds=resolved.oauth_introspection_cache_seconds,
         )
         app.state.mcp_adapter = ERPNextMCPAdapter(
             url=resolved.effective_mcp_url,
@@ -157,6 +167,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(auth.router, prefix=resolved.api_prefix)
+    app.include_router(backchannel.router, prefix=resolved.api_prefix)
     app.include_router(chat.router, prefix=resolved.api_prefix)
     app.include_router(approvals.router, prefix=resolved.api_prefix)
 

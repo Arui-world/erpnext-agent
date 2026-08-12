@@ -187,16 +187,18 @@ class ActionRecoveryWorker:
                     return "error"
 
                 try:
-                    credential = await self._token_store.get_for_user(
+                    agent_session = await self._session_store.get(action.session_id)
+                    if agent_session is None:
+                        raise TokenRefreshError("Originating Agent session is no longer active")
+                    credential = await self._token_store.get(
                         session,
-                        site=action.site,
-                        user_id=action.requested_by,
+                        agent_session.credential_id,
                     )
                     if not self._credential_matches_action(
                         action,
                         credential.site,
                         credential.user_id,
-                    ):
+                    ) or credential.binding_id != agent_session.binding_id:
                         raise TokenRefreshError("OAuth credential identity does not match Action")
                     credential = await self._refresh_service.get_valid(
                         session,

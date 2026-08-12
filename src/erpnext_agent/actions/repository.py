@@ -31,12 +31,14 @@ class ActionRepository:
         action_id: str,
         site: str,
         user_id: str,
+        session_id: str,
         for_update: bool = False,
     ) -> ActionRecord:
         query = select(ActionRecord).where(
             ActionRecord.action_id == action_id,
             ActionRecord.site == site,
             ActionRecord.requested_by == user_id,
+            ActionRecord.session_id == session_id,
         ).execution_options(populate_existing=True)
         if for_update:
             query = query.with_for_update()
@@ -81,6 +83,7 @@ class ActionRepository:
         *,
         site: str,
         user_id: str,
+        session_id: str,
         conversation_id: str,
         limit: int,
     ) -> list[ActionRecord]:
@@ -89,6 +92,7 @@ class ActionRepository:
             .where(
                 ActionRecord.site == site,
                 ActionRecord.requested_by == user_id,
+                ActionRecord.session_id == session_id,
                 ActionRecord.preview["conversation_id"].as_string()
                 == conversation_id,
             )
@@ -98,6 +102,34 @@ class ActionRepository:
         # The database query keeps the newest bounded set. The API returns it in
         # chronological order so restored cards follow their original chat turns.
         return list(reversed(list(result)))
+
+    async def expire_for_sessions(
+        self,
+        session: AsyncSession,
+        *,
+        session_ids: list[str],
+        failure_code: str = "ERP_AUTHORIZATION_REVOKED",
+    ) -> int:
+        if not session_ids:
+            return 0
+        result = cast(
+            CursorResult[Any],
+            await session.execute(
+                update(ActionRecord)
+                .where(
+                    ActionRecord.session_id.in_(session_ids),
+                    ActionRecord.status.in_(
+                        [ActionStatus.PENDING.value, ActionStatus.APPROVED.value]
+                    ),
+                )
+                .values(
+                    status=ActionStatus.EXPIRED.value,
+                    failure_code=failure_code,
+                    failure_message="ERPNext browser authorization was revoked",
+                )
+            ),
+        )
+        return int(result.rowcount or 0)
 
     async def claim_execution(self, session: AsyncSession, action_id: str) -> bool:
         now = datetime.now(UTC)

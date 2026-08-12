@@ -1,6 +1,11 @@
 "use strict";
 
 const API_PREFIX = "/api/v1";
+const SESSION_RECHECK_MS = 5_000;
+const authChannel =
+  typeof BroadcastChannel === "function"
+    ? new BroadcastChannel("erpnext-agent-auth")
+    : null;
 
 const MODES = {
   model: {
@@ -88,7 +93,7 @@ function setAuthenticated(session) {
   syncControls();
 }
 
-function setUnauthenticated() {
+function setUnauthenticated(label = "需要登录 ERPNext") {
   clearActionPolling();
   state.csrfToken = null;
   state.user = null;
@@ -97,9 +102,21 @@ function setUnauthenticated() {
   state.conversations = { model: [], agent: [] };
   elements.login.classList.remove("hidden");
   elements.logout.classList.add("hidden");
-  setConnection("disconnected", "需要登录 ERPNext");
+  setConnection("disconnected", label);
   renderConversationList();
   syncControls();
+}
+
+function handleSessionEnded(
+  message = "ERPNext 已退出或账号发生变化，请重新授权",
+  notifyOtherTabs = true,
+) {
+  state.busy = false;
+  setUnauthenticated(message);
+  resetConversation();
+  if (notifyOtherTabs) {
+    authChannel?.postMessage({ type: "erpnext-session-ended", message });
+  }
 }
 
 function syncControls() {
@@ -303,7 +320,7 @@ async function actionRequest(path, options = {}) {
     ...options,
   });
   if (response.status === 401 || response.status === 403) {
-    setUnauthenticated();
+    handleSessionEnded();
   }
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
@@ -592,7 +609,7 @@ async function fetchConversationList(mode) {
     },
   );
   if (response.status === 401 || response.status === 403) {
-    setUnauthenticated();
+    handleSessionEnded();
     throw new Error("登录状态已失效，请重新登录 ERPNext");
   }
   if (!response.ok) {
@@ -608,7 +625,7 @@ async function fetchConversationActions(conversationId) {
     headers: { Accept: "application/json" },
   });
   if (response.status === 401 || response.status === 403) {
-    setUnauthenticated();
+    handleSessionEnded();
     throw new Error("登录状态已失效，请重新登录 ERPNext");
   }
   if (!response.ok) {
@@ -740,7 +757,7 @@ async function loadWorkspace(mode, preferredConversationId = null) {
       headers: { Accept: "application/json" },
     });
     if (response.status === 401 || response.status === 403) {
-      setUnauthenticated();
+      handleSessionEnded();
       return;
     }
     if (!response.ok) {
@@ -799,7 +816,7 @@ async function createNewConversation() {
       body: JSON.stringify({ mode }),
     });
     if (response.status === 401 || response.status === 403) {
-      setUnauthenticated();
+      handleSessionEnded();
       throw new Error("登录状态已失效，请重新登录 ERPNext");
     }
     if (!response.ok) {
@@ -861,7 +878,7 @@ async function sendMessage(rawMessage) {
     });
 
     if (response.status === 401 || response.status === 403) {
-      setUnauthenticated();
+      handleSessionEnded();
       throw new Error("登录状态已失效，请重新登录 ERPNext");
     }
     if (!response.ok) {
@@ -897,19 +914,28 @@ async function sendMessage(rawMessage) {
   }
 }
 
-async function loadSession() {
+async function loadSession({ notifyOtherTabs = false } = {}) {
   try {
     const response = await fetch(`${API_PREFIX}/auth/session`, {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     });
-    if (!response.ok) {
-      setUnauthenticated();
+    if (response.status === 401 || response.status === 403) {
+      handleSessionEnded(undefined, notifyOtherTabs || Boolean(state.user));
       return;
     }
-    setAuthenticated(await response.json());
-    setHistoryPanel(!isNarrowScreen());
-    await loadWorkspace(state.mode);
+    if (!response.ok) {
+      setConnection("disconnected", "ERPNext 授权状态暂时无法验证");
+      syncControls();
+      return;
+    }
+    const session = await response.json();
+    const firstLoad = !state.user;
+    setAuthenticated(session);
+    if (firstLoad) {
+      setHistoryPanel(!isNarrowScreen());
+      await loadWorkspace(state.mode);
+    }
   } catch {
     setConnection("disconnected", "无法连接 Agent 服务");
     syncControls();
@@ -927,8 +953,7 @@ async function logout() {
       headers: { "X-CSRF-Token": state.csrfToken },
     });
   } finally {
-    setUnauthenticated();
-    resetConversation();
+    handleSessionEnded("需要登录 ERPNext");
   }
 }
 
@@ -973,6 +998,30 @@ elements.historyToggle.addEventListener("click", () => {
 });
 elements.historyBackdrop.addEventListener("click", () => setHistoryPanel(false));
 elements.logout.addEventListener("click", () => void logout());
+
+authChannel?.addEventListener("message", (event) => {
+  if (event.data?.type === "erpnext-session-ended") {
+    handleSessionEnded(event.data.message, false);
+  }
+});
+
+window.addEventListener("focus", () => {
+  if (state.user) {
+    void loadSession({ notifyOtherTabs: true });
+  }
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.user) {
+    void loadSession({ notifyOtherTabs: true });
+  }
+});
+
+window.setInterval(() => {
+  if (document.visibilityState === "visible" && state.user) {
+    void loadSession({ notifyOtherTabs: true });
+  }
+}, SESSION_RECHECK_MS);
 
 window.matchMedia("(max-width: 820px)").addEventListener("change", (event) => {
   setHistoryPanel(!event.matches);

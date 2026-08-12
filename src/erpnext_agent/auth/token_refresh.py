@@ -116,11 +116,9 @@ class TokenRefreshService:
             raise TokenRefreshError("OAuth refresh token is unavailable; please sign in again")
         try:
             token = await self._oauth.refresh(credential.refresh_token)
-            await self._store.upsert(
+            await self._store.replace_tokens(
                 session,
-                site=credential.site,
-                oauth_subject=credential.oauth_subject,
-                user_id=credential.user_id,
+                credential_id=credential.credential_id,
                 token=token,
             )
             await session.commit()

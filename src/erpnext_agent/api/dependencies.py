@@ -7,6 +7,11 @@ from typing import Annotated, cast
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from erpnext_agent.auth.authorization import (
+    AuthorizationRevokedError,
+    AuthorizationService,
+    AuthorizationUnavailableError,
+)
 from erpnext_agent.auth.session_store import AgentSession, SessionStore
 from erpnext_agent.config import Settings
 
@@ -25,7 +30,10 @@ async def database_session(request: Request) -> AsyncIterator[AsyncSession]:
             raise
 
 
-async def current_session(request: Request) -> AgentSession:
+async def current_session(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(database_session)],
+) -> AgentSession:
     settings: Settings = request.app.state.settings
     store: SessionStore = request.app.state.session_store
     raw_id = request.cookies.get(settings.session_cookie_name)
@@ -37,6 +45,19 @@ async def current_session(request: Request) -> AgentSession:
     session = await store.get(raw_id)
     if session is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+    authorization: AuthorizationService = request.app.state.authorization_service
+    try:
+        await authorization.validate(db, session)
+    except AuthorizationRevokedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "ERP_AUTHORIZATION_REVOKED", "message": str(exc)},
+        ) from exc
+    except AuthorizationUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "ERP_AUTHORIZATION_UNAVAILABLE", "message": str(exc)},
+        ) from exc
     return session
 
 

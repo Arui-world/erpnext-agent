@@ -62,10 +62,17 @@ async def test_oauth_separates_browser_and_container_urls() -> None:
     settings = oauth_settings()
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         oauth = OAuthClient(settings, http)
-        authorization = urlsplit(oauth.authorization_url(create_pkce_request()))
+        authorization = urlsplit(
+            oauth.authorization_url(
+                create_pkce_request(),
+                binding_id="00000000-0000-0000-0000-000000000040",
+            )
+        )
         query = parse_qs(authorization.query)
         assert authorization.netloc == "dev.localhost:8000"
+        assert authorization.path.endswith("erpnext_mcp_tools.auth.device_binding.begin")
         assert query["redirect_uri"] == ["http://localhost:8001/api/v1/auth/callback"]
+        assert query["binding_id"] == ["00000000-0000-0000-0000-000000000040"]
 
         token = await oauth.exchange_code(code="test-code", verifier="test-verifier")
 

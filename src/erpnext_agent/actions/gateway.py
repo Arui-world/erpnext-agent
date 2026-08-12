@@ -73,6 +73,7 @@ class ActionGateway:
         action_id: str,
         site: str,
         user_id: str,
+        session_id: str,
         decision: Literal["approve", "reject"],
     ) -> ActionRecord:
         record = await self._repository.get_for_user(
@@ -80,6 +81,7 @@ class ActionGateway:
             action_id=action_id,
             site=site,
             user_id=user_id,
+            session_id=session_id,
             for_update=True,
         )
         if self._repository.expire_if_needed(record):

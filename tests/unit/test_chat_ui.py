@@ -92,6 +92,10 @@ def test_chat_ui_contains_required_layout_and_local_assets() -> None:
     assert "scheduleActionPolling" in javascript
     assert "ActionRestore.attachActionsToMessages" in javascript
     assert "SafeMarkdown.renderMarkdown" in javascript
+    assert "SESSION_RECHECK_MS = 5_000" in javascript
+    assert "BroadcastChannel(\"erpnext-agent-auth\")" in javascript
+    assert 'document.addEventListener("visibilitychange"' in javascript
+    assert "ERPNext 已退出或账号发生变化，请重新授权" in javascript
     assert "bubble.innerHTML" not in javascript
     assert "documentRef.createTextNode" in markdown
     assert '"javascript:"' not in markdown

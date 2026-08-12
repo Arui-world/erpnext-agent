@@ -33,6 +33,19 @@ class OAuthTokenSet:
     expires_in: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class OAuthBindingConfirmation:
+    binding_id: str
+    user: str
+    client_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class OAuthIntrospection:
+    active: bool
+    client_id: str | None
+
+
 def create_pkce_request() -> PKCERequest:
     verifier = secrets.token_urlsafe(64)
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
@@ -65,6 +78,20 @@ class OAuthClient:
         )
 
     @property
+    def binding_start_endpoint(self) -> str:
+        return urljoin(
+            self._settings.erpnext_base_url + "/",
+            "api/method/erpnext_mcp_tools.auth.device_binding.begin",
+        )
+
+    @property
+    def binding_confirm_endpoint(self) -> str:
+        return urljoin(
+            self._settings.effective_erpnext_internal_url + "/",
+            "api/method/erpnext_mcp_tools.auth.device_binding.confirm",
+        )
+
+    @property
     def profile_endpoint(self) -> str:
         return urljoin(
             self._settings.effective_erpnext_internal_url + "/",
@@ -85,7 +112,14 @@ class OAuthClient:
             "api/method/frappe.integrations.oauth2.revoke_token",
         )
 
-    def authorization_url(self, request: PKCERequest) -> str:
+    @property
+    def introspection_endpoint(self) -> str:
+        return urljoin(
+            self._settings.effective_erpnext_internal_url + "/",
+            "api/method/frappe.integrations.oauth2.introspect_token",
+        )
+
+    def authorization_url(self, request: PKCERequest, *, binding_id: str) -> str:
         query = urlencode(
             {
                 "response_type": "code",
@@ -96,9 +130,10 @@ class OAuthClient:
                 "nonce": request.nonce,
                 "code_challenge": request.challenge,
                 "code_challenge_method": "S256",
+                "binding_id": binding_id,
             }
         )
-        return f"{self.authorize_endpoint}?{query}"
+        return f"{self.binding_start_endpoint}?{query}"
 
     async def exchange_code(self, *, code: str, verifier: str) -> OAuthTokenSet:
         return await self._token_request(
@@ -173,6 +208,58 @@ class OAuthClient:
         if not isinstance(user, str) or not user:
             raise OAuthError("ERPNext session did not contain a user identity")
         return user
+
+    async def confirm_binding(
+        self,
+        access_token: str,
+        *,
+        binding_id: str,
+    ) -> OAuthBindingConfirmation:
+        try:
+            response = await self._http.post(
+                self.binding_confirm_endpoint,
+                data={"binding_id": binding_id},
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Host": self._settings.erpnext_host_header,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise OAuthError("Unable to bind OAuth authorization to this browser") from exc
+        data = payload.get("message") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            raise OAuthError("ERPNext browser binding response was invalid")
+        binding = data.get("binding_id")
+        user = data.get("user")
+        client_id = data.get("client_id")
+        if not isinstance(binding, str) or not binding:
+            raise OAuthError("ERPNext browser binding identity was invalid")
+        if not isinstance(user, str) or not user:
+            raise OAuthError("ERPNext browser binding identity was invalid")
+        if not isinstance(client_id, str) or not client_id:
+            raise OAuthError("ERPNext browser binding identity was invalid")
+        return OAuthBindingConfirmation(binding, user, client_id)
+
+    async def introspect(self, access_token: str) -> OAuthIntrospection:
+        try:
+            response = await self._client_authenticated_post(
+                self.introspection_endpoint,
+                {"token": access_token, "token_type_hint": "access_token"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise OAuthError("ERPNext token introspection is unavailable") from exc
+        data = payload.get("message", payload) if isinstance(payload, dict) else None
+        if not isinstance(data, dict) or not isinstance(data.get("active"), bool):
+            raise OAuthError("ERPNext token introspection response was invalid")
+        client_id = data.get("client_id")
+        return OAuthIntrospection(
+            active=data["active"],
+            client_id=client_id if isinstance(client_id, str) else None,
+        )
 
     async def revoke(self, access_token: str) -> None:
         try:

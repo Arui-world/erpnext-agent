@@ -35,6 +35,7 @@ async def run_smoke() -> None:
     try:
         agent_session = await session_store.create(
             credential_id="action-restore-smoke-credential",
+            binding_id="00000000-0000-0000-0000-000000000001",
             site=settings.erpnext_site,
             user_id=owner,
         )

@@ -54,6 +54,7 @@ async def run_smoke() -> str:
     )
     session = await store.create(
         credential_id="ui-smoke-model-only",
+        binding_id="00000000-0000-0000-0000-000000000004",
         site=settings.erpnext_site,
         user_id="ui-smoke@local",
     )

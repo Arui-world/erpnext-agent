@@ -79,6 +79,7 @@ async def list_conversation_actions(
         db,
         site=session.site,
         user_id=session.user_id,
+        session_id=session.session_id,
         conversation_id=str(conversation_id),
         limit=settings.action_history_limit,
     )
@@ -98,6 +99,7 @@ async def get_action(action_id: str, session: CurrentSession, db: DBSession) -> 
             action_id=action_id,
             site=session.site,
             user_id=session.user_id,
+            session_id=session.session_id,
         )
     except ActionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Action not found") from exc
@@ -124,6 +126,7 @@ async def decide_action(
             action_id=action_id,
             site=session.site,
             user_id=session.user_id,
+            session_id=session.session_id,
             decision=payload.decision,
         )
     except ActionNotFoundError as exc:
@@ -147,6 +150,7 @@ async def execute_action(
             action_id=action_id,
             site=session.site,
             user_id=session.user_id,
+            session_id=session.session_id,
         )
     except ActionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Action not found") from exc
@@ -186,6 +190,7 @@ async def execute_action(
             action_id=action_id,
             site=session.site,
             user_id=session.user_id,
+            session_id=session.session_id,
         )
         await _validate_executable_action(repository, record, session.user_id, db)
         if record.status == ActionStatus.SUCCEEDED.value:

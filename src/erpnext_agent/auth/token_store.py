@@ -23,6 +23,7 @@ class CredentialDecryptError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class StoredCredential:
     credential_id: str
+    binding_id: str
     site: str
     oauth_subject: str
     user_id: str
@@ -40,38 +41,50 @@ class TokenStore:
         self._key_version = key_version
         self._client_id = client_id
 
-    async def upsert(
+    async def create(
         self,
         session: AsyncSession,
         *,
+        binding_id: str,
         site: str,
         oauth_subject: str,
         user_id: str,
         token: OAuthTokenSet,
     ) -> str:
-        record = await session.scalar(
-            select(OAuthCredentialRecord).where(
-                OAuthCredentialRecord.site == site,
-                OAuthCredentialRecord.user_id == user_id,
-                OAuthCredentialRecord.client_id == self._client_id,
-            )
-        )
         now = datetime.now(UTC)
-        if record is None:
-            record = OAuthCredentialRecord(
-                credential_id=str(uuid.uuid4()),
-                site=site,
-                client_id=self._client_id,
-                oauth_subject=oauth_subject,
-                user_id=user_id,
-                access_token_ciphertext="",
-                key_version=self._key_version,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(record)
+        record = OAuthCredentialRecord(
+            credential_id=str(uuid.uuid4()),
+            binding_id=binding_id,
+            site=site,
+            client_id=self._client_id,
+            oauth_subject=oauth_subject,
+            user_id=user_id,
+            access_token_ciphertext=self._encrypt(token.access_token),
+            refresh_token_ciphertext=(
+                self._encrypt(token.refresh_token) if token.refresh_token else None
+            ),
+            scope=token.scope,
+            token_type=token.token_type,
+            expires_at=(now + timedelta(seconds=token.expires_in) if token.expires_in else None),
+            key_version=self._key_version,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(record)
+        await session.flush()
+        return record.credential_id
 
-        record.oauth_subject = oauth_subject
+    async def replace_tokens(
+        self,
+        session: AsyncSession,
+        *,
+        credential_id: str,
+        token: OAuthTokenSet,
+    ) -> None:
+        record = await session.get(OAuthCredentialRecord, credential_id)
+        if record is None:
+            raise CredentialNotFoundError(credential_id)
+        now = datetime.now(UTC)
         record.scope = token.scope
         record.token_type = token.token_type
         record.access_token_ciphertext = self._encrypt(token.access_token)
@@ -82,7 +95,6 @@ class TokenStore:
         record.updated_at = now
         record.revoked_at = None
         await session.flush()
-        return record.credential_id
 
     async def get(self, session: AsyncSession, credential_id: str) -> StoredCredential:
         record = await session.scalar(
@@ -94,31 +106,28 @@ class TokenStore:
             raise CredentialNotFoundError(credential_id)
         return self._stored_credential(record)
 
-    async def get_for_user(
+    async def get_for_binding(
         self,
         session: AsyncSession,
         *,
-        site: str,
-        user_id: str,
+        binding_id: str,
     ) -> StoredCredential:
-        """Resolve the encrypted credential for a persisted Action owner."""
-
         record = await session.scalar(
             select(OAuthCredentialRecord)
             .where(
-                OAuthCredentialRecord.site == site,
-                OAuthCredentialRecord.user_id == user_id,
+                OAuthCredentialRecord.binding_id == binding_id,
                 OAuthCredentialRecord.client_id == self._client_id,
             )
             .execution_options(populate_existing=True)
         )
         if record is None:
-            raise CredentialNotFoundError(f"{site}:{user_id}")
+            raise CredentialNotFoundError(binding_id)
         return self._stored_credential(record)
 
     def _stored_credential(self, record: OAuthCredentialRecord) -> StoredCredential:
         return StoredCredential(
             credential_id=record.credential_id,
+            binding_id=record.binding_id,
             site=record.site,
             oauth_subject=record.oauth_subject,
             user_id=record.user_id,
@@ -141,6 +150,19 @@ class TokenStore:
             record.access_token_ciphertext = self._encrypt("")
             record.refresh_token_ciphertext = None
             record.updated_at = datetime.now(UTC)
+
+    async def revoke_by_binding(self, session: AsyncSession, binding_id: str) -> list[str]:
+        records = list(
+            await session.scalars(
+                select(OAuthCredentialRecord).where(
+                    OAuthCredentialRecord.binding_id == binding_id,
+                    OAuthCredentialRecord.client_id == self._client_id,
+                )
+            )
+        )
+        for record in records:
+            await self.revoke(session, record.credential_id)
+        return [record.credential_id for record in records]
 
     def _encrypt(self, value: str) -> str:
         return self._fernet.encrypt(value.encode()).decode()
