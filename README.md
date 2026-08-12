@@ -28,6 +28,7 @@
 - Alembic 前向迁移、现有 `create_all()` 数据库安全接管、ORM drift 检查和应用 revision 门禁；
 - 环境变量模板、非 root/只读 Agent 镜像、PostgreSQL + Redis Docker Compose；
 - PKCE、MCP 响应、工具隔离、意图门控、参数哈希和日志脱敏单元测试。
+- 版本化离线策略评估 Runner、首批 20 个场景、分类指标和逐场景证据报告。
 
 `POST /api/v1/chat` 已能对查询和巡检请求执行用户专属的模型/工具循环；
 `POST /api/v1/chat/stream` 提供文本、工具状态和待审批 Action SSE。创建或修改草稿时，
@@ -180,6 +181,18 @@ Agent 对话历史加载时会同时读取该会话的 Action 记录，把审批
 以及软删除满 7 天的会话会被物理删除，`chat_messages` 通过数据库外键级联清理。多实例使用
 `FOR UPDATE SKIP LOCKED` 避免重复处理；可以用 `.env.example` 中的 `CHAT_RETENTION_*` 调整或
 关闭 Worker。此策略只管理聊天内容，不删除 Action 审计记录。
+
+首批离线确定性评估不调用模型、ERPNext、Redis 或 PostgreSQL：
+
+```bash
+docker compose run --rm --no-deps agent \
+  python -m erpnext_agent.evaluation.runner
+```
+
+场景源文件位于 `evaluations/scenarios/offline_policy_v1.json`，当前覆盖 20 个路由、上下文继承、
+工具隔离、三类草稿参数和 MCP 响应失败关闭场景。Runner 输出 JSON，阈值通过返回 0、场景执行
+但未达阈值返回 1、场景文件无效返回 2。本指标只证明确定性策略，不代表真实模型准确率、ERPNext
+数据准确率、双用户权限差分或端到端延迟；这些必须由后续在线评估单独报告。
 
 模型配置示例：
 

@@ -21,6 +21,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src ./src
 COPY migrations ./migrations
+COPY evaluations ./evaluations
 
 USER app
 EXPOSE 8001
