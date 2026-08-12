@@ -23,6 +23,7 @@
 - PostgreSQL 会话/消息持久化、按用户隔离的历史恢复和服务端多轮上下文；
 - 版本化长对话增量摘要、Redis 摘要锁和失败降级，原始消息保持完整；
 - 历史会话侧栏、会话列表、显式新建与模型/Agent 模式独立会话；
+- 会话重命名、即时软删除、后台保留策略清理和消息级联删除；
 - PostgreSQL HITL Action、服务端草稿预览、本人确认/拒绝、CAS 执行、幂等键与回读验证；
 - Alembic 前向迁移、现有 `create_all()` 数据库安全接管、ORM drift 检查和应用 revision 门禁；
 - 环境变量模板、非 root/只读 Agent 镜像、PostgreSQL + Redis Docker Compose；
@@ -91,6 +92,7 @@ docker compose run --rm migrate python -m erpnext_agent.migrate current
 校验列、主键、关键唯一约束和会话外键。部分或不兼容结构会失败关闭；历史
 `oauth_credentials` 表被明确视为非托管表，不会删除或修改。迁移采用 PostgreSQL advisory lock
 防止多个部署实例并发升级。应用启动时必须读到预期 revision，否则直接拒绝启动。
+第二个 revision 为会话增加持久化标题和软删除时间，验证既有数据可以继续做版本化升级。
 
 验证：
 
@@ -114,6 +116,8 @@ http://localhost:8001/
 两种模式分别维护独立 `conversation_id`。浏览器只提交当前消息与会话 ID；历史消息从
 PostgreSQL 加载，并在流式回复完成前落库。刷新页面后，页面先读取会话列表，再恢复该模式
 最近或已选中的会话。左侧历史栏支持切换已有会话和显式创建空白新会话。
+每条会话还可以重命名或删除。删除后立即从当前用户视图隐藏；聊天内容在默认 7 天宽限期后
+物理清理，关联 Action 审批/执行记录作为独立审计数据保留。
 
 登录入口是：
 
@@ -136,7 +140,7 @@ GET http://localhost:8001/api/v1/auth/login
 | 加密 | `TOKEN_ENCRYPTION_KEY`, `TOKEN_ENCRYPTION_KEY_VERSION` | OAuth token 信封加密入口 |
 | Action | `ACTION_TTL_SECONDS`, `ACTION_RECOVERY_*`, `ACTION_EXECUTION_LOCK_TTL_SECONDS`, `ACTION_HISTORY_LIMIT` | 审批期限、后台恢复、执行互斥与会话卡片恢复数量 |
 | 模型 | `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_API_KEY`, `MODEL_BASE_URL` | AgentScope Model Factory |
-| 记忆 | `CHAT_HISTORY_*`, `CHAT_SUMMARY_*` | 模型上下文、页面历史和自动摘要策略 |
+| 记忆 | `CHAT_HISTORY_*`, `CHAT_SUMMARY_*`, `CHAT_RETENTION_*` | 模型上下文、页面历史、自动摘要与保留清理策略 |
 | 观测 | `OTEL_*` | 下一阶段 OpenTelemetry exporter |
 
 完整默认值与说明见 [`.env.example`](.env.example)。生产环境必须使用 HTTPS、Secure Cookie 和
@@ -156,6 +160,8 @@ GET http://localhost:8001/api/v1/auth/login
 | `GET /api/v1/chat/history` | 按当前用户、站点和模式恢复持久化消息 |
 | `GET /api/v1/chat/conversations` | 返回当前用户指定模式的历史会话列表 |
 | `POST /api/v1/chat/conversations` | 创建独立新会话，要求 Session 与 CSRF |
+| `PATCH /api/v1/chat/conversations/{id}` | 重命名本人指定模式的会话，要求 CSRF |
+| `DELETE /api/v1/chat/conversations/{id}` | 软删除本人指定模式的会话，要求 CSRF |
 | `GET /`、`GET /assets/*` | 聊天页面与静态资源 |
 | `GET /api/v1/approvals/{id}` | 已实现本人可见约束 |
 | `GET /api/v1/approvals?conversation_id={id}` | 恢复当前用户、站点和会话的审批卡片及最新状态 |
@@ -169,6 +175,11 @@ Action 保持 `EXECUTING` 并记录诊断信息，等待重新登录或人工重
 Agent 对话历史加载时会同时读取该会话的 Action 记录，把审批卡片重新挂载到包含对应 Action ID
 的助手消息；若流式连接在助手消息落库前中断，则追加一张本地恢复卡片。页面会短轮询仍处于
 `EXECUTING` 的记录，直到恢复 Worker 写入终态。
+
+会话保留 Worker 默认每小时执行有界批量清理：180 天无活动的会话、24 小时无消息的空会话，
+以及软删除满 7 天的会话会被物理删除，`chat_messages` 通过数据库外键级联清理。多实例使用
+`FOR UPDATE SKIP LOCKED` 避免重复处理；可以用 `.env.example` 中的 `CHAT_RETENTION_*` 调整或
+关闭 Worker。此策略只管理聊天内容，不删除 Action 审计记录。
 
 模型配置示例：
 

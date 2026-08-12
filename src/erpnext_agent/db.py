@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
-EXPECTED_DATABASE_REVISION = "20260812_0001"
+EXPECTED_DATABASE_REVISION = "20260812_0002"
 MANAGED_DATABASE_TABLES = frozenset(
     {"actions", "chat_conversations", "chat_messages", "oauth_device_credentials"}
 )

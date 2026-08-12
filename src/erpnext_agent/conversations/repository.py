@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from erpnext_agent.conversations.models import ChatMessageRecord, ConversationRecord
@@ -89,15 +89,20 @@ class ConversationRepository:
         site: str,
         user_id: str,
         mode: ConversationMode,
+        for_update: bool = False,
     ) -> ConversationRecord | None:
-        conversation: ConversationRecord | None = await session.scalar(
+        statement = (
             select(ConversationRecord).where(
                 ConversationRecord.conversation_id == conversation_id,
                 ConversationRecord.site == site,
                 ConversationRecord.user_id == user_id,
                 ConversationRecord.mode == mode,
+                ConversationRecord.deleted_at.is_(None),
             )
         )
+        if for_update:
+            statement = statement.with_for_update()
+        conversation: ConversationRecord | None = await session.scalar(statement)
         return conversation
 
     async def latest_owned(
@@ -114,6 +119,7 @@ class ConversationRepository:
                 ConversationRecord.site == site,
                 ConversationRecord.user_id == user_id,
                 ConversationRecord.mode == mode,
+                ConversationRecord.deleted_at.is_(None),
             )
             .order_by(desc(ConversationRecord.updated_at))
             .limit(1)
@@ -136,6 +142,7 @@ class ConversationRepository:
                     ConversationRecord.site == site,
                     ConversationRecord.user_id == user_id,
                     ConversationRecord.mode == mode,
+                    ConversationRecord.deleted_at.is_(None),
                 )
                 .order_by(desc(ConversationRecord.updated_at))
                 .limit(limit)
@@ -161,7 +168,7 @@ class ConversationRepository:
                 ConversationSummary(
                     conversation_id=conversation.conversation_id,
                     mode=mode,
-                    title=conversation_title(first_user_message),
+                    title=conversation.title or conversation_title(first_user_message),
                     message_count=int(message_count or 0),
                     created_at=conversation.created_at,
                     updated_at=conversation.updated_at,
@@ -179,7 +186,10 @@ class ConversationRepository:
     ) -> StoredMessage:
         conversation = await session.scalar(
             select(ConversationRecord)
-            .where(ConversationRecord.conversation_id == conversation_id)
+            .where(
+                ConversationRecord.conversation_id == conversation_id,
+                ConversationRecord.deleted_at.is_(None),
+            )
             .with_for_update()
         )
         if conversation is None:
@@ -249,7 +259,8 @@ class ConversationRepository:
     ) -> ConversationMemory:
         value = await session.scalar(
             select(ConversationRecord.summary).where(
-                ConversationRecord.conversation_id == conversation_id
+                ConversationRecord.conversation_id == conversation_id,
+                ConversationRecord.deleted_at.is_(None),
             )
         )
         return decode_memory(value)
@@ -263,7 +274,10 @@ class ConversationRepository:
     ) -> ConversationMemory:
         conversation = await session.scalar(
             select(ConversationRecord)
-            .where(ConversationRecord.conversation_id == conversation_id)
+            .where(
+                ConversationRecord.conversation_id == conversation_id,
+                ConversationRecord.deleted_at.is_(None),
+            )
             .with_for_update()
         )
         if conversation is None:
@@ -290,6 +304,105 @@ class ConversationRepository:
         )
         return trim_context(messages, max_chars=max_chars)
 
+    async def rename_owned(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: str,
+        site: str,
+        user_id: str,
+        mode: ConversationMode,
+        title: str,
+    ) -> ConversationRecord:
+        conversation = await self.get_owned(
+            session,
+            conversation_id=conversation_id,
+            site=site,
+            user_id=user_id,
+            mode=mode,
+            for_update=True,
+        )
+        if conversation is None:
+            raise ConversationNotFoundError(conversation_id)
+        conversation.title = normalize_conversation_title(title)
+        conversation.updated_at = datetime.now(UTC)
+        await session.flush()
+        return conversation
+
+    async def soft_delete_owned(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: str,
+        site: str,
+        user_id: str,
+        mode: ConversationMode,
+    ) -> None:
+        conversation = await self.get_owned(
+            session,
+            conversation_id=conversation_id,
+            site=site,
+            user_id=user_id,
+            mode=mode,
+            for_update=True,
+        )
+        if conversation is None:
+            raise ConversationNotFoundError(conversation_id)
+        now = datetime.now(UTC)
+        conversation.deleted_at = now
+        conversation.updated_at = now
+        await session.flush()
+
+    async def purge_expired(
+        self,
+        session: AsyncSession,
+        *,
+        now: datetime,
+        retention_days: int,
+        deleted_retention_days: int,
+        empty_retention_hours: int,
+        limit: int,
+    ) -> int:
+        retention_cutoff = now - timedelta(days=retention_days)
+        deleted_cutoff = now - timedelta(days=deleted_retention_days)
+        empty_cutoff = now - timedelta(hours=empty_retention_hours)
+        has_messages = (
+            select(ChatMessageRecord.message_id)
+            .where(
+                ChatMessageRecord.conversation_id
+                == ConversationRecord.conversation_id
+            )
+            .exists()
+        )
+        expired = or_(
+            and_(
+                ConversationRecord.deleted_at.is_not(None),
+                ConversationRecord.deleted_at <= deleted_cutoff,
+            ),
+            and_(
+                ConversationRecord.deleted_at.is_(None),
+                ConversationRecord.updated_at <= retention_cutoff,
+            ),
+            and_(
+                ConversationRecord.deleted_at.is_(None),
+                ConversationRecord.created_at <= empty_cutoff,
+                ~has_messages,
+            ),
+        )
+        records = list(
+            await session.scalars(
+                select(ConversationRecord)
+                .where(expired)
+                .order_by(ConversationRecord.updated_at)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+        )
+        for record in records:
+            await session.delete(record)
+        await session.flush()
+        return len(records)
+
 
 def trim_context(messages: list[StoredMessage], *, max_chars: int) -> list[StoredMessage]:
     """Keep the newest contiguous messages that fit in the model context budget."""
@@ -312,6 +425,15 @@ def conversation_title(content: str | None, *, max_length: int = 42) -> str:
     if len(normalized) <= max_length:
         return normalized
     return normalized[:max_length].rstrip() + "…"
+
+
+def normalize_conversation_title(content: str, *, max_length: int = 80) -> str:
+    normalized = " ".join(content.split())
+    if not normalized:
+        raise ValueError("Conversation title cannot be blank")
+    if len(normalized) > max_length:
+        raise ValueError(f"Conversation title cannot exceed {max_length} characters")
+    return normalized
 
 
 def encode_memory(memory: ConversationMemory) -> str:

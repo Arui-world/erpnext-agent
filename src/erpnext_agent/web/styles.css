@@ -244,21 +244,21 @@ textarea:focus-visible {
 }
 
 .conversation-item {
-  display: block;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   width: 100%;
   margin: 2px 0;
-  padding: 10px 11px;
   overflow: hidden;
   border: 1px solid transparent;
   border-radius: 11px;
   color: var(--ink-soft);
   background: transparent;
-  text-align: left;
-  cursor: pointer;
   transition: 140ms ease;
 }
 
-.conversation-item:hover:not(:disabled) {
+.conversation-item:hover {
   color: var(--ink);
   background: rgb(255 255 255 / 58%);
 }
@@ -270,8 +270,60 @@ textarea:focus-visible {
   box-shadow: 0 5px 18px rgb(31 35 40 / 5%);
 }
 
-.conversation-item:disabled {
+.conversation-item-main {
+  min-width: 0;
+  padding: 10px 8px 10px 11px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conversation-item-main:disabled {
   cursor: wait;
+}
+
+.conversation-item-actions {
+  display: flex;
+  gap: 1px;
+  padding-right: 5px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.conversation-item:hover .conversation-item-actions,
+.conversation-item:focus-within .conversation-item-actions,
+.conversation-item.active .conversation-item-actions {
+  opacity: 1;
+}
+
+.conversation-item-action {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink-faint);
+  background: transparent;
+  cursor: pointer;
+}
+
+.conversation-item-action:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--panel-muted);
+}
+
+.conversation-item-action.danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: #f8eaea;
+}
+
+.conversation-item-action:disabled {
+  cursor: wait;
+  opacity: 0.45;
 }
 
 .conversation-item-title {
@@ -1079,6 +1131,12 @@ textarea:focus-visible {
 
   .key-hint {
     display: none;
+  }
+}
+
+@media (hover: none) {
+  .conversation-item-actions {
+    opacity: 1;
   }
 }
 

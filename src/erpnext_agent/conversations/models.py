@@ -24,9 +24,15 @@ class ConversationRecord(Base):
     site: Mapped[str] = mapped_column(String(255), index=True)
     user_id: Mapped[str] = mapped_column(String(255), index=True)
     mode: Mapped[str] = mapped_column(String(16), index=True)
+    title: Mapped[str | None] = mapped_column(String(120), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
 
 
 class ChatMessageRecord(Base):

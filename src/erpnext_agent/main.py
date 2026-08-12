@@ -31,6 +31,11 @@ from erpnext_agent.conversations.memory import (
     ConversationMemoryPolicy,
     ConversationMemoryService,
 )
+from erpnext_agent.conversations.repository import ConversationRepository
+from erpnext_agent.conversations.retention import (
+    ConversationRetentionPolicy,
+    ConversationRetentionWorker,
+)
 from erpnext_agent.db import (
     create_engine,
     create_session_factory,
@@ -132,10 +137,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             batch_size=resolved.action_recovery_batch_size,
             execution_lock_ttl_seconds=resolved.action_execution_lock_ttl_seconds,
         )
+        app.state.conversation_retention_worker = ConversationRetentionWorker(
+            session_factory=session_factory,
+            repository=ConversationRepository(),
+            policy=ConversationRetentionPolicy(
+                enabled=resolved.chat_retention_enabled,
+                retention_days=resolved.chat_retention_days,
+                deleted_retention_days=resolved.chat_deleted_retention_days,
+                empty_retention_hours=resolved.chat_empty_retention_hours,
+                sweep_seconds=resolved.chat_retention_sweep_seconds,
+                batch_size=resolved.chat_retention_batch_size,
+            ),
+        )
         app.state.action_recovery_worker.start()
+        app.state.conversation_retention_worker.start()
         try:
             yield
         finally:
+            await app.state.conversation_retention_worker.stop()
             await app.state.action_recovery_worker.stop()
             await http.aclose()
             await redis.aclose()
@@ -155,7 +174,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=resolved.cors_origin_list,
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type", "X-CSRF-Token", "X-Request-ID"],
     )
 

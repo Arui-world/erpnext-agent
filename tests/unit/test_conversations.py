@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from erpnext_agent.conversations.repository import (
     StoredMessage,
     conversation_title,
+    normalize_conversation_title,
     trim_context,
 )
 
@@ -36,3 +37,21 @@ def test_conversation_title_normalizes_and_truncates_first_user_message() -> Non
     assert conversation_title(None) == "新对话"
     assert conversation_title("  查询\n最近的  销售订单 ") == "查询 最近的 销售订单"
     assert conversation_title("123456", max_length=4) == "1234…"
+
+
+def test_custom_conversation_title_is_normalized_and_bounded() -> None:
+    assert normalize_conversation_title("  月度\n库存  分析 ") == "月度 库存 分析"
+
+    try:
+        normalize_conversation_title("   ")
+    except ValueError as exc:
+        assert "blank" in str(exc)
+    else:
+        raise AssertionError("blank title must fail")
+
+    try:
+        normalize_conversation_title("x" * 81)
+    except ValueError as exc:
+        assert "80" in str(exc)
+    else:
+        raise AssertionError("oversized title must fail")

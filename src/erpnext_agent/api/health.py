@@ -35,6 +35,12 @@ async def ready(request: Request, response: Response) -> dict[str, Any]:
     if recovery_worker.enabled:
         checks["action_recovery"] = "ok" if recovery_worker.running else "error"
 
+    retention_worker = request.app.state.conversation_retention_worker
+    if retention_worker.enabled:
+        checks["conversation_retention"] = (
+            "ok" if retention_worker.running else "error"
+        )
+
     healthy = all(value == "ok" for value in checks.values())
     if not healthy:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -52,6 +58,9 @@ async def ready(request: Request, response: Response) -> dict[str, Any]:
             "database_migrations": True,
             "database_revision": request.app.state.database_revision,
             "conversation_auto_summary": request.app.state.settings.chat_summary_enabled,
+            "conversation_retention_worker": (
+                retention_worker.enabled and retention_worker.running
+            ),
             "model_configured": model_configuration_is_complete(request.app.state.settings),
             "agent_chat_runtime": model_configuration_is_complete(
                 request.app.state.settings

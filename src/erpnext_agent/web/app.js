@@ -475,10 +475,13 @@ function renderConversationList() {
     : "还没有历史，点击“新对话”开始";
   const activeId = state.conversationIds[state.mode];
   for (const conversation of conversations) {
+    const row = document.createElement("div");
+    row.className = "conversation-item";
+    row.classList.toggle("active", conversation.conversation_id === activeId);
+
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "conversation-item";
-    button.classList.toggle("active", conversation.conversation_id === activeId);
+    button.className = "conversation-item-main";
     button.setAttribute(
       "aria-current",
       conversation.conversation_id === activeId ? "page" : "false",
@@ -504,9 +507,138 @@ function renderConversationList() {
       }
       void loadWorkspace(state.mode, conversation.conversation_id);
     });
-    elements.conversationList.appendChild(button);
+
+    const actions = document.createElement("span");
+    actions.className = "conversation-item-actions";
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.className = "conversation-item-action";
+    rename.textContent = "✎";
+    rename.setAttribute("aria-label", `重命名对话：${conversation.title}`);
+    rename.title = "重命名";
+    rename.addEventListener("click", () => void renameConversation(conversation));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "conversation-item-action danger";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `删除对话：${conversation.title}`);
+    remove.title = "删除";
+    remove.addEventListener("click", () => void deleteConversation(conversation));
+    actions.append(rename, remove);
+    row.append(button, actions);
+    elements.conversationList.appendChild(row);
   }
   syncControls();
+}
+
+async function renameConversation(conversation) {
+  if (!state.csrfToken || state.busy) {
+    return;
+  }
+  const rawTitle = window.prompt("重命名对话", conversation.title || "新对话");
+  if (rawTitle === null) {
+    return;
+  }
+  let title;
+  try {
+    title = window.ConversationLifecycle.normalizeTitle(rawTitle);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "对话标题无效");
+    return;
+  }
+  if (title === conversation.title) {
+    return;
+  }
+
+  const mode = state.mode;
+  state.busy = true;
+  syncControls();
+  try {
+    const response = await fetch(
+      `${API_PREFIX}/chat/conversations/${encodeURIComponent(conversation.conversation_id)}`,
+      {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": state.csrfToken,
+        },
+        body: JSON.stringify({ mode, title }),
+      },
+    );
+    if (response.status === 401 || response.status === 403) {
+      handleSessionEnded();
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(`无法重命名对话（${response.status}）`);
+    }
+    const updated = await response.json();
+    state.conversations[mode] = window.ConversationLifecycle.replaceConversation(
+      state.conversations[mode],
+      updated,
+    );
+    renderConversationList();
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "无法重命名对话");
+  } finally {
+    state.busy = false;
+    syncControls();
+  }
+}
+
+async function deleteConversation(conversation) {
+  if (!state.csrfToken || state.busy) {
+    return;
+  }
+  const confirmed = window.confirm(
+    `确定删除“${conversation.title || "新对话"}”吗？\n\n聊天内容会立即从列表隐藏并按保留策略清理；关联审批审计记录不会删除。`,
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  const mode = state.mode;
+  const wasActive = state.conversationIds[mode] === conversation.conversation_id;
+  let reload = false;
+  state.busy = true;
+  syncControls();
+  try {
+    const query = new URLSearchParams({ mode });
+    const response = await fetch(
+      `${API_PREFIX}/chat/conversations/${encodeURIComponent(conversation.conversation_id)}?${query}`,
+      {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": state.csrfToken },
+      },
+    );
+    if (response.status === 401 || response.status === 403) {
+      handleSessionEnded();
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(`无法删除对话（${response.status}）`);
+    }
+    state.conversations[mode] = window.ConversationLifecycle.removeConversation(
+      state.conversations[mode],
+      conversation.conversation_id,
+    );
+    if (wasActive) {
+      state.conversationIds[mode] = state.conversations[mode][0]?.conversation_id || null;
+      resetConversation();
+      reload = true;
+    }
+    renderConversationList();
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "无法删除对话");
+  } finally {
+    state.busy = false;
+    syncControls();
+  }
+  if (reload && state.csrfToken && state.mode === mode) {
+    await loadWorkspace(mode, state.conversationIds[mode]);
+  }
 }
 
 function resizeInput() {

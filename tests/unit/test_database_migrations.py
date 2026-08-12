@@ -22,6 +22,17 @@ def test_alembic_has_one_expected_head() -> None:
     assert script.get_heads() == [EXPECTED_DATABASE_REVISION]
 
 
+def test_alembic_conversation_lifecycle_follows_initial_schema() -> None:
+    config = Config(str(PROJECT_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+    script = ScriptDirectory.from_config(config)
+
+    lifecycle = script.get_revision("20260812_0002")
+
+    assert lifecycle is not None
+    assert lifecycle.down_revision == "20260812_0001"
+
+
 def test_managed_tables_match_current_orm_metadata() -> None:
     load_models()
 

@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     chat_summary_source_max_chars: int = Field(default=24_000, ge=4_000, le=100_000)
     chat_summary_max_chars: int = Field(default=4_000, ge=500, le=20_000)
     chat_summary_lock_ttl_seconds: int = Field(default=120, ge=30, le=600)
+    chat_retention_enabled: bool = True
+    chat_retention_days: int = Field(default=180, ge=1, le=3650)
+    chat_deleted_retention_days: int = Field(default=7, ge=1, le=365)
+    chat_empty_retention_hours: int = Field(default=24, ge=1, le=720)
+    chat_retention_sweep_seconds: int = Field(default=3600, ge=60, le=86_400)
+    chat_retention_batch_size: int = Field(default=100, ge=1, le=1000)
 
     model_provider: Literal["dashscope", "openai", "openai_compatible"] = "openai_compatible"
     model_name: str = ""

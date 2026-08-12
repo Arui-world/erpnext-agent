@@ -16,9 +16,9 @@ from agentscope.event import (
     ToolResultStartEvent,
 )
 from agentscope.message import AssistantMsg, Msg, UserMsg
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from erpnext_agent.actions.gateway import ActionGateway
@@ -47,6 +47,7 @@ from erpnext_agent.conversations.repository import (
     ConversationNotFoundError,
     ConversationRepository,
     StoredMessage,
+    normalize_conversation_title,
 )
 from erpnext_agent.conversations.repository import (
     ConversationSummary as StoredConversationSummary,
@@ -85,6 +86,25 @@ class ConversationHistoryResponse(BaseModel):
 
 class CreateConversationRequest(BaseModel):
     mode: ConversationMode = "model"
+
+
+class RenameConversationRequest(BaseModel):
+    mode: ConversationMode
+    title: str = Field(min_length=1, max_length=80)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def normalize_title(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Conversation title must be a string")
+        return normalize_conversation_title(value)
+
+
+class ConversationUpdateResponse(BaseModel):
+    conversation_id: str
+    mode: ConversationMode
+    title: str
+    updated_at: datetime
 
 
 class ConversationSummaryResponse(BaseModel):
@@ -169,6 +189,63 @@ async def create_conversation(
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
     )
+
+
+@router.patch(
+    "/conversations/{conversation_id}",
+    response_model=ConversationUpdateResponse,
+)
+async def rename_conversation(
+    conversation_id: UUID,
+    payload: RenameConversationRequest,
+    session: ProtectedSession,
+    db: DBSession,
+) -> ConversationUpdateResponse:
+    repository = ConversationRepository()
+    try:
+        conversation = await repository.rename_owned(
+            db,
+            conversation_id=str(conversation_id),
+            site=session.site,
+            user_id=session.user_id,
+            mode=payload.mode,
+            title=payload.title,
+        )
+    except ConversationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    await db.commit()
+    return ConversationUpdateResponse(
+        conversation_id=conversation.conversation_id,
+        mode=payload.mode,
+        title=conversation.title or "新对话",
+        updated_at=conversation.updated_at,
+    )
+
+
+@router.delete(
+    "/conversations/{conversation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_conversation(
+    conversation_id: UUID,
+    session: ProtectedSession,
+    db: DBSession,
+    mode: Annotated[ConversationMode, Query()] = "model",
+) -> Response:
+    repository = ConversationRepository()
+    try:
+        await repository.soft_delete_owned(
+            db,
+            conversation_id=str(conversation_id),
+            site=session.site,
+            user_id=session.user_id,
+            mode=mode,
+        )
+    except ConversationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/history", response_model=ConversationHistoryResponse)

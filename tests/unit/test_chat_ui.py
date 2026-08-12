@@ -67,7 +67,9 @@ def test_chat_ui_contains_required_layout_and_local_assets() -> None:
     assert 'href="/assets/styles.css"' in html
     assert 'src="/assets/markdown.js"' in html
     assert 'src="/assets/action_restore.js"' in html
+    assert 'src="/assets/conversation_lifecycle.js"' in html
     assert html.index("/assets/action_restore.js") < html.index("/assets/app.js")
+    assert html.index("/assets/conversation_lifecycle.js") < html.index("/assets/app.js")
     assert ".message-row.user" in css
     assert ".markdown-table-wrap" in css
     assert ".markdown-body table" in css
@@ -76,12 +78,17 @@ def test_chat_ui_contains_required_layout_and_local_assets() -> None:
     assert "/chat/stream" in javascript
     assert "/chat/history" in javascript
     assert "/chat/conversations" in javascript
+    assert 'method: "PATCH"' in javascript
+    assert 'method: "DELETE"' in javascript
+    assert "renameConversation" in javascript
+    assert "deleteConversation" in javascript
     assert "conversation_id" in javascript
     assert "historyForRequest" not in javascript
     assert 'id="new-conversation-button"' in html
     assert 'id="conversation-list"' in html
     assert 'class="action-card hidden"' in html
     assert ".conversation-item.active" in css
+    assert ".conversation-item-action" in css
     assert ".action-card" in css
     assert ".action-button.approve" in css
     assert 'case "action_required"' in javascript
