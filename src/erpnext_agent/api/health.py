@@ -49,6 +49,8 @@ async def ready(request: Request, response: Response) -> dict[str, Any]:
             "action_recovery_worker": (
                 recovery_worker.enabled and recovery_worker.running
             ),
+            "database_migrations": True,
+            "database_revision": request.app.state.database_revision,
             "conversation_auto_summary": request.app.state.settings.chat_summary_enabled,
             "model_configured": model_configuration_is_complete(request.app.state.settings),
             "agent_chat_runtime": model_configuration_is_complete(

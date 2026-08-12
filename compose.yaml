@@ -1,6 +1,31 @@
 name: erpnext-agent
 
 services:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: erpnext-agent:local
+    restart: "no"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-erpnext_agent}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-erpnext_agent}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    command: ["python", "-m", "erpnext_agent.migrate", "upgrade"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
   agent:
     build:
       context: .
@@ -18,6 +43,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:

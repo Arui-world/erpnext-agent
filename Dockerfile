@@ -16,10 +16,11 @@ RUN groupadd --gid 10001 app \
 COPY --from=uv /uv /uvx /usr/local/bin/
 
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock README.md alembic.ini ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src ./src
+COPY migrations ./migrations
 
 USER app
 EXPOSE 8001

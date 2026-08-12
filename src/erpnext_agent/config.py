@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     trusted_hosts: str = "localhost,127.0.0.1,agent"
     cors_origins: str = "http://localhost:3000,http://localhost:8001"
-    auto_create_schema: bool = True
 
     database_url: str
     redis_url: SecretStr
@@ -176,8 +175,6 @@ class Settings(BaseSettings):
                 raise ValueError("APP_BASE_URL must use HTTPS in production")
             if not self.oauth_redirect_uri.startswith("https://"):
                 raise ValueError("OAUTH_REDIRECT_URI must use HTTPS in production")
-            if self.auto_create_schema:
-                raise ValueError("AUTO_CREATE_SCHEMA must be false in production")
             if self.erp_logout_webhook_secret is None:
                 raise ValueError("ERP_LOGOUT_WEBHOOK_SECRET is required in production")
         return self

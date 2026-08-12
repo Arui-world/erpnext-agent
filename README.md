@@ -24,6 +24,7 @@
 - 版本化长对话增量摘要、Redis 摘要锁和失败降级，原始消息保持完整；
 - 历史会话侧栏、会话列表、显式新建与模型/Agent 模式独立会话；
 - PostgreSQL HITL Action、服务端草稿预览、本人确认/拒绝、CAS 执行、幂等键与回读验证；
+- Alembic 前向迁移、现有 `create_all()` 数据库安全接管、ORM drift 检查和应用 revision 门禁；
 - 环境变量模板、非 root/只读 Agent 镜像、PostgreSQL + Redis Docker Compose；
 - PKCE、MCP 响应、工具隔离、意图门控、参数哈希和日志脱敏单元测试。
 
@@ -66,7 +67,8 @@ make rebuild
 ```
 
 首次启动、修改 Python 代码、依赖或 Dockerfile 后使用 `make rebuild`；没有代码变化时使用
-`make up`，它只启动/协调现有容器，不再强制执行镜像构建。常用运维命令：
+`make up`，它只启动/协调现有容器，不再强制执行镜像构建。Compose 每次启动会先运行一次性
+`migrate` Job；只有迁移成功退出，Agent 才会启动。常用运维命令：
 
 ```bash
 make up       # 日常启动，不强制构建
@@ -76,6 +78,19 @@ make logs     # 持续查看 Agent 日志
 make ps       # 查看 Compose 服务状态
 make down     # 停止并删除 Compose 容器
 ```
+
+数据库迁移也可以独立执行和检查：
+
+```bash
+docker compose run --rm migrate
+docker compose run --rm migrate python -m erpnext_agent.migrate check
+docker compose run --rm migrate python -m erpnext_agent.migrate current
+```
+
+首次 Alembic revision 支持接管早期由 SQLAlchemy `create_all()` 创建的完整结构：接管前逐表
+校验列、主键、关键唯一约束和会话外键。部分或不兼容结构会失败关闭；历史
+`oauth_credentials` 表被明确视为非托管表，不会删除或修改。迁移采用 PostgreSQL advisory lock
+防止多个部署实例并发升级。应用启动时必须读到预期 revision，否则直接拒绝启动。
 
 验证：
 
@@ -114,7 +129,7 @@ GET http://localhost:8001/api/v1/auth/login
 
 | 分组 | 变量 | 说明 |
 |---|---|---|
-| 基础设施 | `DATABASE_URL`, `REDIS_URL` | Action/token/聊天记录与 Session/state 存储 |
+| 基础设施 | `DATABASE_URL`, `REDIS_URL` | Alembic/Action/token/聊天记录与 Session/state 存储 |
 | ERPNext | `ERPNEXT_BASE_URL`, `ERPNEXT_INTERNAL_URL`, `ERPNEXT_MCP_URL`, `ERPNEXT_SITE` | 浏览器地址、容器内地址与 MCP endpoint |
 | OAuth | `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URI`, `OAUTH_REFRESH_*` | 每环境独立 OAuth Client 与刷新策略 |
 | 会话 | `SESSION_SECRET`, `SESSION_COOKIE_*`, `SESSION_TTL_SECONDS` | Agent 浏览器会话 |
@@ -124,8 +139,9 @@ GET http://localhost:8001/api/v1/auth/login
 | 记忆 | `CHAT_HISTORY_*`, `CHAT_SUMMARY_*` | 模型上下文、页面历史和自动摘要策略 |
 | 观测 | `OTEL_*` | 下一阶段 OpenTelemetry exporter |
 
-完整默认值与说明见 [`.env.example`](.env.example)。生产环境必须使用 HTTPS、Secure Cookie、
-外部 Secret 管理器和正式迁移工具，并设置 `AUTO_CREATE_SCHEMA=false`。
+完整默认值与说明见 [`.env.example`](.env.example)。生产环境必须使用 HTTPS、Secure Cookie 和
+外部 Secret 管理器。`AUTO_CREATE_SCHEMA` 已移除，所有环境统一通过 Alembic `migrate` Job 管理
+结构；迁移文件不保存数据库 URL 或密码。
 
 ## API 骨架
 

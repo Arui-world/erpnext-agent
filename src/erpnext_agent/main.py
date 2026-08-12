@@ -31,7 +31,11 @@ from erpnext_agent.conversations.memory import (
     ConversationMemoryPolicy,
     ConversationMemoryService,
 )
-from erpnext_agent.db import create_engine, create_schema, create_session_factory
+from erpnext_agent.db import (
+    create_engine,
+    create_session_factory,
+    verify_database_revision,
+)
 from erpnext_agent.mcp.adapter import ERPNextMCPAdapter
 
 
@@ -42,6 +46,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = create_engine(resolved.database_url, echo=resolved.app_debug)
+        try:
+            database_revision = await verify_database_revision(engine)
+        except Exception:
+            await engine.dispose()
+            raise
         session_factory = create_session_factory(engine)
         redis = Redis.from_url(resolved.redis_url.get_secret_value(), decode_responses=True)
         http = httpx.AsyncClient(
@@ -51,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         app.state.settings = resolved
         app.state.db_engine = engine
+        app.state.database_revision = database_revision
         app.state.db_session_factory = session_factory
         app.state.redis = redis
         app.state.http = http
@@ -108,8 +118,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             agent_factory=app.state.agent_factory,
             adapter=app.state.mcp_adapter,
         )
-        if resolved.auto_create_schema:
-            await create_schema(engine)
         app.state.action_recovery_worker = ActionRecoveryWorker(
             enabled=resolved.action_recovery_enabled,
             session_factory=session_factory,
