@@ -42,6 +42,12 @@ from erpnext_agent.db import (
     verify_database_revision,
 )
 from erpnext_agent.mcp.adapter import ERPNextMCPAdapter
+from erpnext_agent.observability import (
+    Telemetry,
+    create_telemetry,
+    normalized_request_id,
+    set_span_result,
+)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -50,11 +56,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        telemetry = create_telemetry(resolved)
+        app.state.telemetry = telemetry
         engine = create_engine(resolved.database_url, echo=resolved.app_debug)
         try:
             database_revision = await verify_database_revision(engine)
         except Exception:
             await engine.dispose()
+            telemetry.shutdown()
             raise
         session_factory = create_session_factory(engine)
         redis = Redis.from_url(resolved.redis_url.get_secret_value(), decode_responses=True)
@@ -104,11 +113,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             http=http,
             verify_contract=resolved.mcp_verify_tool_contract,
             host_header=resolved.erpnext_host_header,
+            telemetry=telemetry,
         )
         app.state.agent_factory = ConfiguredAgentFactory(resolved)
         app.state.conversation_memory_service = ConversationMemoryService(
             redis=redis,
-            generator=AgentSummaryGenerator(app.state.agent_factory),
+            generator=AgentSummaryGenerator(app.state.agent_factory, telemetry),
             policy=ConversationMemoryPolicy(
                 enabled=resolved.chat_summary_enabled,
                 trigger_messages=resolved.chat_summary_trigger_messages,
@@ -136,6 +146,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             retry_seconds=resolved.action_recovery_retry_seconds,
             batch_size=resolved.action_recovery_batch_size,
             execution_lock_ttl_seconds=resolved.action_execution_lock_ttl_seconds,
+            telemetry=telemetry,
         )
         app.state.conversation_retention_worker = ConversationRetentionWorker(
             session_factory=session_factory,
@@ -148,6 +159,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 sweep_seconds=resolved.chat_retention_sweep_seconds,
                 batch_size=resolved.chat_retention_batch_size,
             ),
+            telemetry=telemetry,
         )
         app.state.action_recovery_worker.start()
         app.state.conversation_retention_worker.start()
@@ -159,6 +171,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await http.aclose()
             await redis.aclose()
             await engine.dispose()
+            telemetry.shutdown()
 
     app = FastAPI(
         title=resolved.app_name,
@@ -169,6 +182,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
     )
     app.state.settings = resolved
+    app.state.telemetry = Telemetry.disabled(
+        resolved.session_secret.get_secret_value()
+    )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=resolved.trusted_host_list)
     app.add_middleware(
         CORSMiddleware,
@@ -183,9 +199,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         call_next: RequestResponseEndpoint,
     ) -> Response:
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        request_id = normalized_request_id(
+            request.headers.get("X-Request-ID"),
+            fallback=str(uuid.uuid4()),
+        )
         request.state.request_id = request_id
-        response = await call_next(request)
+        telemetry = request.app.state.telemetry
+        parent_context = telemetry.extract(request.headers)
+        with telemetry.span(
+            "http.request",
+            parent_context=parent_context,
+            attributes={
+                "request_id": request_id,
+                "http.request.method": request.method,
+            },
+        ) as span:
+            try:
+                response = await call_next(request)
+            except Exception:
+                set_span_result(span, "HTTP_UNHANDLED_EXCEPTION", error=True)
+                raise
+            route = request.scope.get("route")
+            route_path = getattr(route, "path", None)
+            if isinstance(route_path, str):
+                span.set_attribute("http.route", route_path)
+            span.set_attribute("http.response.status_code", response.status_code)
+            set_span_result(
+                span,
+                f"HTTP_{response.status_code}",
+                error=response.status_code >= 500,
+            )
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"

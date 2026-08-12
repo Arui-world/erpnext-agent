@@ -106,6 +106,7 @@ class Settings(BaseSettings):
     otel_enabled: bool = False
     otel_service_name: str = "erpnext-agent"
     otel_exporter_otlp_endpoint: str | None = None
+    otel_export_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
 
     @field_validator("app_base_url", "erpnext_base_url", "oauth_redirect_uri")
     @classmethod
@@ -152,6 +153,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_environment_safety(self) -> Settings:
+        if self.otel_enabled and self.otel_exporter_otlp_endpoint is None:
+            raise ValueError(
+                "OTEL_EXPORTER_OTLP_ENDPOINT is required when OTEL_ENABLED=true"
+            )
         if self.action_recovery_retry_seconds < self.action_recovery_poll_seconds:
             raise ValueError(
                 "ACTION_RECOVERY_RETRY_SECONDS must be greater than or equal to "

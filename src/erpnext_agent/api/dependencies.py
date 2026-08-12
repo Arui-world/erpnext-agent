@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated, cast
 
 from fastapi import Depends, Header, HTTPException, Request, status
+from opentelemetry import trace
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from erpnext_agent.auth.authorization import (
@@ -14,6 +15,7 @@ from erpnext_agent.auth.authorization import (
 )
 from erpnext_agent.auth.session_store import AgentSession, SessionStore
 from erpnext_agent.config import Settings
+from erpnext_agent.observability import Telemetry
 
 
 def settings_from_request(request: Request) -> Settings:
@@ -45,6 +47,10 @@ async def current_session(
     session = await store.get(raw_id)
     if session is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+    telemetry: Telemetry = request.app.state.telemetry
+    current_span = trace.get_current_span()
+    if current_span.is_recording():
+        current_span.set_attribute("session_id", telemetry.identifier(session.session_id))
     authorization: AuthorizationService = request.app.state.authorization_service
     try:
         await authorization.validate(db, session)

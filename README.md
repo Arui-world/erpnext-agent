@@ -29,6 +29,7 @@
 - 环境变量模板、非 root/只读 Agent 镜像、PostgreSQL + Redis Docker Compose；
 - PKCE、MCP 响应、工具隔离、意图门控、参数哈希和日志脱敏单元测试。
 - 版本化离线策略评估 Runner、首批 20 个场景、分类指标和逐场景证据报告。
+- 可选 OpenTelemetry OTLP/HTTP Trace，覆盖 HTTP、模型、MCP、Action、恢复和保留清理边界。
 
 `POST /api/v1/chat` 已能对查询和巡检请求执行用户专属的模型/工具循环；
 `POST /api/v1/chat/stream` 提供文本、工具状态和待审批 Action SSE。创建或修改草稿时，
@@ -142,11 +143,23 @@ GET http://localhost:8001/api/v1/auth/login
 | Action | `ACTION_TTL_SECONDS`, `ACTION_RECOVERY_*`, `ACTION_EXECUTION_LOCK_TTL_SECONDS`, `ACTION_HISTORY_LIMIT` | 审批期限、后台恢复、执行互斥与会话卡片恢复数量 |
 | 模型 | `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_API_KEY`, `MODEL_BASE_URL` | AgentScope Model Factory |
 | 记忆 | `CHAT_HISTORY_*`, `CHAT_SUMMARY_*`, `CHAT_RETENTION_*` | 模型上下文、页面历史、自动摘要与保留清理策略 |
-| 观测 | `OTEL_*` | 下一阶段 OpenTelemetry exporter |
+| 观测 | `OTEL_ENABLED`, `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORT_TIMEOUT_SECONDS` | 可选 OTLP/HTTP Trace 导出 |
 
 完整默认值与说明见 [`.env.example`](.env.example)。生产环境必须使用 HTTPS、Secure Cookie 和
 外部 Secret 管理器。`AUTO_CREATE_SCHEMA` 已移除，所有环境统一通过 Alembic `migrate` Job 管理
 结构；迁移文件不保存数据库 URL 或密码。
+
+OpenTelemetry 默认关闭。启用时，`OTEL_EXPORTER_OTLP_ENDPOINT` 必须填写 OTLP/HTTP 的完整
+Trace 地址（通常以 `/v1/traces` 结尾）；容器访问宿主机 Collector 时应使用
+`host.docker.internal`，或直接填写同一 Docker 网络中的 Collector 服务名。`/health/ready`
+通过 `otel_tracing` 仅报告是否启用，不把 Collector 暂时不可用升级为业务不可用。Exporter
+采用后台批量发送；导出失败不会中断聊天、MCP 或 Action 执行。
+
+Trace 只记录固定的技术字段，例如 `request_id`、HMAC 后的 `session_id`、`turn_id`、
+`agent_name`、`model_call_id`、`tool_name`、`json_rpc_id`、`mcp_trace_id`、`action_id`、
+`duration_ms`、`retry_count` 和 `result_code`。不会记录 OAuth token、Cookie、Client Secret、
+完整 Prompt、工具参数、业务响应或异常正文。MCP HTTP 请求会注入 W3C `traceparent`，便于
+与支持 Trace Context 的 ERPNext MCP 服务关联。
 
 ## API 骨架
 

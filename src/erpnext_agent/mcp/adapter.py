@@ -7,6 +7,11 @@ from typing import Any
 import httpx
 
 from erpnext_agent.mcp.policy import EXPECTED_TOOLS
+from erpnext_agent.observability import (
+    Telemetry,
+    normalized_technical_value,
+    set_span_result,
+)
 
 
 class MCPError(RuntimeError):
@@ -92,11 +97,13 @@ class ERPNextMCPAdapter:
         http: httpx.AsyncClient,
         verify_contract: bool = True,
         host_header: str | None = None,
+        telemetry: Telemetry | None = None,
     ) -> None:
         self._url = url
         self._http = http
         self._verify_contract = verify_contract
         self._host_header = host_header
+        self.telemetry = telemetry or Telemetry.disabled()
         self._ids = itertools.count(1)
 
     async def initialize(self, access_token: str) -> dict[str, Any]:
@@ -142,16 +149,40 @@ class ERPNextMCPAdapter:
         arguments: dict[str, Any],
         discover_first: bool = False,
     ) -> MCPEnvelope:
-        if discover_first:
-            tools = await self.discover_tools(access_token)
-            if name not in {item.get("name") for item in tools}:
-                raise MCPContractError(f"MCP tool is unavailable: {name}", code="TOOL_UNAVAILABLE")
-        payload = await self._rpc(
-            access_token,
-            "tools/call",
-            {"name": name, "arguments": arguments},
-        )
-        return normalize_tool_response(payload)
+        with self.telemetry.span(
+            "mcp.tool.call",
+            attributes={"tool_name": name, "rpc.system": "jsonrpc"},
+        ) as span:
+            try:
+                if discover_first:
+                    tools = await self.discover_tools(access_token)
+                    if name not in {item.get("name") for item in tools}:
+                        raise MCPContractError(
+                            f"MCP tool is unavailable: {name}",
+                            code="TOOL_UNAVAILABLE",
+                        )
+                payload = await self._rpc(
+                    access_token,
+                    "tools/call",
+                    {"name": name, "arguments": arguments},
+                )
+                envelope = normalize_tool_response(payload)
+            except MCPError as exc:
+                if exc.trace_id:
+                    span.set_attribute(
+                        "mcp_trace_id",
+                        normalized_technical_value(exc.trace_id),
+                    )
+                set_span_result(span, exc.code, error=True)
+                raise
+            trace_id = envelope.meta.get("trace_id")
+            if isinstance(trace_id, str):
+                span.set_attribute(
+                    "mcp_trace_id",
+                    normalized_technical_value(trace_id),
+                )
+            set_span_result(span, "OK")
+            return envelope
 
     async def current_user(
         self,
@@ -178,37 +209,63 @@ class ERPNextMCPAdapter:
         method: str,
         params: dict[str, Any],
     ) -> dict[str, Any]:
+        json_rpc_id = next(self._ids)
         body = {
             "jsonrpc": "2.0",
-            "id": next(self._ids),
+            "id": json_rpc_id,
             "method": method,
             "params": params,
         }
-        try:
-            response = await self._http.post(
-                self._url,
-                json=body,
-                headers=self._headers(access_token),
-            )
-        except httpx.HTTPError as exc:
-            raise MCPTransportError("Unable to reach ERPNext MCP", code="MCP_UNAVAILABLE") from exc
-        if response.status_code in {401, 403}:
-            raise MCPTransportError("ERPNext authentication failed", code="MCP_AUTH_FAILED")
-        if response.is_error:
-            raise MCPTransportError(
-                "ERPNext MCP returned an HTTP error",
-                code=f"HTTP_{response.status_code}",
-            )
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise MCPProtocolError(
-                "ERPNext MCP returned invalid JSON",
-                code="INVALID_JSON",
-            ) from exc
-        if not isinstance(payload, dict):
-            raise MCPProtocolError("ERPNext MCP returned invalid JSON-RPC", code="INVALID_JSON_RPC")
-        return payload
+        with self.telemetry.span(
+            "mcp.rpc",
+            attributes={
+                "rpc.system": "jsonrpc",
+                "rpc.method": method,
+                "json_rpc_id": json_rpc_id,
+            },
+        ) as span:
+            try:
+                response = await self._http.post(
+                    self._url,
+                    json=body,
+                    headers=self._headers(access_token),
+                )
+            except httpx.HTTPError as exc:
+                set_span_result(span, "MCP_UNAVAILABLE", error=True)
+                raise MCPTransportError(
+                    "Unable to reach ERPNext MCP",
+                    code="MCP_UNAVAILABLE",
+                ) from exc
+            span.set_attribute("http.response.status_code", response.status_code)
+            if response.status_code in {401, 403}:
+                set_span_result(span, "MCP_AUTH_FAILED", error=True)
+                raise MCPTransportError(
+                    "ERPNext authentication failed",
+                    code="MCP_AUTH_FAILED",
+                )
+            if response.is_error:
+                code = f"HTTP_{response.status_code}"
+                set_span_result(span, code, error=True)
+                raise MCPTransportError(
+                    "ERPNext MCP returned an HTTP error",
+                    code=code,
+                )
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                set_span_result(span, "INVALID_JSON", error=True)
+                raise MCPProtocolError(
+                    "ERPNext MCP returned invalid JSON",
+                    code="INVALID_JSON",
+                ) from exc
+            if not isinstance(payload, dict):
+                set_span_result(span, "INVALID_JSON_RPC", error=True)
+                raise MCPProtocolError(
+                    "ERPNext MCP returned invalid JSON-RPC",
+                    code="INVALID_JSON_RPC",
+                )
+            set_span_result(span, "OK")
+            return payload
 
     async def _notification(
         self,
@@ -239,4 +296,5 @@ class ERPNextMCPAdapter:
         headers = {"Authorization": f"Bearer {access_token}"}
         if self._host_header:
             headers["Host"] = self._host_header
+        self.telemetry.inject(headers)
         return headers

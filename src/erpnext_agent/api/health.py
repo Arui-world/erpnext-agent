@@ -57,6 +57,7 @@ async def ready(request: Request, response: Response) -> dict[str, Any]:
             ),
             "database_migrations": True,
             "database_revision": request.app.state.database_revision,
+            "otel_tracing": request.app.state.telemetry.enabled,
             "conversation_auto_summary": request.app.state.settings.chat_summary_enabled,
             "conversation_retention_worker": (
                 retention_worker.enabled and retention_worker.running

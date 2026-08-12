@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -54,6 +55,7 @@ from erpnext_agent.conversations.repository import (
 )
 from erpnext_agent.mcp.adapter import MCPError
 from erpnext_agent.mcp.refreshing_caller import RefreshingMCPCaller
+from erpnext_agent.observability import Telemetry, set_span_result
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -137,6 +139,7 @@ class ChatResponse(BaseModel):
 @dataclass(frozen=True, slots=True)
 class StartedTurn:
     conversation_id: str
+    turn_id: str
     messages: list[Msg]
     previous_user_messages: list[str]
 
@@ -337,13 +340,25 @@ async def chat(
         ),
     )
     agent = runtime.agent_for(decision.intent)
-    try:
-        reply = await agent.reply(turn.messages)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="Model reply failed") from exc
-    text = assistant_text(reply)
-    if not text:
-        raise HTTPException(status_code=502, detail="Model returned no text")
+    telemetry = cast(Telemetry, request.app.state.telemetry)
+    with telemetry.span(
+        "agent.model.reply",
+        attributes={
+            "turn_id": turn.turn_id,
+            "agent_name": agent.name,
+            "model_call_id": str(uuid.uuid4()),
+        },
+    ) as span:
+        try:
+            reply = await agent.reply(turn.messages)
+        except Exception as exc:
+            set_span_result(span, "MODEL_REPLY_FAILED", error=True)
+            raise HTTPException(status_code=502, detail="Model reply failed") from exc
+        text = assistant_text(reply)
+        if not text:
+            set_span_result(span, "MODEL_EMPTY_REPLY", error=True)
+            raise HTTPException(status_code=502, detail="Model returned no text")
+        set_span_result(span, "OK")
     action = (
         runtime.action_proposal_tool.record
         if runtime.action_proposal_tool is not None
@@ -406,6 +421,7 @@ async def chat_stream(
         ),
     )
     agent = runtime.agent_for(decision.intent)
+    telemetry = cast(Telemetry, request.app.state.telemetry)
     return StreamingResponse(
         _persistent_reply_events(
             agent,
@@ -413,6 +429,8 @@ async def chat_stream(
             db,
             repository,
             action_proposal_tool=runtime.action_proposal_tool,
+            telemetry=telemetry,
+            parent_context=telemetry.current_context(),
         ),
         media_type="text/event-stream",
         headers={"X-Accel-Buffering": "no"},
@@ -440,12 +458,15 @@ async def model_chat_stream(
     )
     agent_factory = cast(ConfiguredAgentFactory, request.app.state.agent_factory)
     agent = agent_factory.build_model_chat_agent()
+    telemetry = cast(Telemetry, request.app.state.telemetry)
     return StreamingResponse(
         _persistent_reply_events(
             agent,
             turn,
             db,
             repository,
+            telemetry=telemetry,
+            parent_context=telemetry.current_context(),
         ),
         media_type="text/event-stream",
         headers={"X-Accel-Buffering": "no"},
@@ -493,6 +514,7 @@ async def _start_turn(
     await db.commit()
     return StartedTurn(
         conversation_id=conversation.conversation_id,
+        turn_id=str(uuid.uuid4()),
         messages=_conversation_messages(
             context.messages,
             message,
@@ -671,6 +693,8 @@ async def _persistent_reply_events(
     repository: ConversationRepository,
     *,
     action_proposal_tool: ActionProposalTool | None = None,
+    telemetry: Telemetry | None = None,
+    parent_context: Any | None = None,
 ) -> AsyncIterator[str]:
     yield _sse("conversation", {"conversation_id": turn.conversation_id})
 
@@ -682,6 +706,9 @@ async def _persistent_reply_events(
         turn.messages,
         on_complete=persist_reply,
         action_proposal_tool=action_proposal_tool,
+        telemetry=telemetry,
+        parent_context=parent_context,
+        turn_id=turn.turn_id,
     ):
         yield event
 
@@ -692,6 +719,9 @@ async def _reply_events(
     *,
     on_complete: Callable[[str], Awaitable[None]] | None = None,
     action_proposal_tool: ActionProposalTool | None = None,
+    telemetry: Telemetry | None = None,
+    parent_context: Any | None = None,
+    turn_id: str | None = None,
 ) -> AsyncIterator[str]:
     messages: Msg | list[Msg]
     if isinstance(inputs, str):
@@ -699,54 +729,75 @@ async def _reply_events(
     else:
         messages = inputs
     text_chunks: list[str] = []
-    try:
-        async for event in agent.reply_stream(messages):
-            if isinstance(event, TextBlockDeltaEvent):
-                delta = str(event.delta)
-                text_chunks.append(delta)
-                yield _sse("text_delta", {"delta": delta})
-            elif isinstance(event, ToolCallStartEvent):
-                yield _sse(
-                    "tool_call_start",
-                    {
-                        "tool_call_id": event.tool_call_id,
-                        "tool_name": event.tool_call_name,
-                    },
-                )
-            elif isinstance(event, ToolResultStartEvent):
-                yield _sse(
-                    "tool_result_start",
-                    {"tool_call_id": event.tool_call_id},
-                )
-            elif isinstance(event, ToolResultEndEvent):
-                yield _sse(
-                    "tool_result_end",
-                    {"tool_call_id": event.tool_call_id},
-                )
-            elif isinstance(event, ReplyEndEvent):
-                reply_text = "".join(text_chunks).strip()
-                if not reply_text:
-                    reply_text = EMPTY_REPLY_FALLBACK
-                    text_chunks.append(reply_text)
-                    yield _sse("text_delta", {"delta": reply_text})
-                action = (
-                    action_proposal_tool.record
-                    if action_proposal_tool is not None
-                    else None
-                )
-                if action is not None:
-                    appendix = action_summary_markdown(action)
-                    text_chunks.append(appendix)
+    telemetry = telemetry or Telemetry.disabled()
+    attributes: dict[str, str] = {
+        "agent_name": str(getattr(agent, "name", "agent")),
+        "model_call_id": str(uuid.uuid4()),
+    }
+    if turn_id is not None:
+        attributes["turn_id"] = turn_id
+    with telemetry.span(
+        "agent.model.reply_stream",
+        attributes=attributes,
+        parent_context=parent_context,
+    ) as span:
+        try:
+            async for event in agent.reply_stream(messages):
+                if isinstance(event, TextBlockDeltaEvent):
+                    delta = str(event.delta)
+                    text_chunks.append(delta)
+                    yield _sse("text_delta", {"delta": delta})
+                elif isinstance(event, ToolCallStartEvent):
+                    yield _sse(
+                        "tool_call_start",
+                        {
+                            "tool_call_id": event.tool_call_id,
+                            "tool_name": event.tool_call_name,
+                        },
+                    )
+                elif isinstance(event, ToolResultStartEvent):
+                    yield _sse(
+                        "tool_result_start",
+                        {"tool_call_id": event.tool_call_id},
+                    )
+                elif isinstance(event, ToolResultEndEvent):
+                    yield _sse(
+                        "tool_result_end",
+                        {"tool_call_id": event.tool_call_id},
+                    )
+                elif isinstance(event, ReplyEndEvent):
                     reply_text = "".join(text_chunks).strip()
-                    yield _sse("text_delta", {"delta": appendix})
-                if on_complete is not None:
-                    await on_complete(reply_text)
-                if action is not None:
-                    yield _sse("action_required", action_public_payload(action))
-                reason = getattr(event.finished_reason, "value", str(event.finished_reason))
-                yield _sse("done", {"finished_reason": reason})
-    except Exception:
-        yield _sse("error", {"code": "AGENT_REPLY_FAILED", "message": "Agent reply failed"})
+                    if not reply_text:
+                        reply_text = EMPTY_REPLY_FALLBACK
+                        text_chunks.append(reply_text)
+                        yield _sse("text_delta", {"delta": reply_text})
+                    action = (
+                        action_proposal_tool.record
+                        if action_proposal_tool is not None
+                        else None
+                    )
+                    if action is not None:
+                        appendix = action_summary_markdown(action)
+                        text_chunks.append(appendix)
+                        reply_text = "".join(text_chunks).strip()
+                        yield _sse("text_delta", {"delta": appendix})
+                    if on_complete is not None:
+                        await on_complete(reply_text)
+                    if action is not None:
+                        yield _sse("action_required", action_public_payload(action))
+                    reason = getattr(
+                        event.finished_reason,
+                        "value",
+                        str(event.finished_reason),
+                    )
+                    set_span_result(span, "OK")
+                    yield _sse("done", {"finished_reason": reason})
+        except Exception:
+            set_span_result(span, "AGENT_REPLY_FAILED", error=True)
+            yield _sse(
+                "error",
+                {"code": "AGENT_REPLY_FAILED", "message": "Agent reply failed"},
+            )
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:

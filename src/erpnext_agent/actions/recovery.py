@@ -30,6 +30,7 @@ from erpnext_agent.auth.token_store import (
 from erpnext_agent.coordination import RedisLeaseClient
 from erpnext_agent.mcp.adapter import ERPNextMCPAdapter, MCPContractError, MCPError
 from erpnext_agent.mcp.refreshing_caller import RefreshingMCPCaller
+from erpnext_agent.observability import Telemetry, set_span_result
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class ActionRecoveryWorker:
         retry_seconds: int,
         batch_size: int,
         execution_lock_ttl_seconds: int,
+        telemetry: Telemetry | None = None,
     ) -> None:
         self.enabled = enabled
         self._session_factory = session_factory
@@ -77,6 +79,7 @@ class ActionRecoveryWorker:
         self._retry_seconds = retry_seconds
         self._batch_size = batch_size
         self._execution_lock_ttl_seconds = execution_lock_ttl_seconds
+        self._telemetry = telemetry or Telemetry.disabled()
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self.last_report: ActionRecoveryReport | None = None
@@ -103,46 +106,54 @@ class ActionRecoveryWorker:
         self._task = None
 
     async def run_once(self) -> ActionRecoveryReport:
-        async with self._session_factory() as session:
-            action_ids = await self._repository.list_executing_ids(
-                session,
-                limit=self._batch_size,
-            )
-
-        counts: dict[RecoveryOutcome, int] = {
-            "recovered": 0,
-            "failed": 0,
-            "deferred": 0,
-            "skipped": 0,
-            "error": 0,
-        }
-        for action_id in action_ids:
-            try:
-                claimed = await claim_action_recovery_attempt(
-                    self._redis,
-                    action_id=action_id,
-                    cooldown_seconds=self._retry_seconds,
+        with self._telemetry.span("action.recovery.scan") as span:
+            async with self._session_factory() as session:
+                action_ids = await self._repository.list_executing_ids(
+                    session,
+                    limit=self._batch_size,
                 )
-                if not claimed:
-                    counts["deferred"] += 1
-                    continue
-                outcome = await self._recover_one(action_id)
-            except Exception:
-                logger.exception("Action recovery attempt failed", extra={"action_id": action_id})
-                outcome = "error"
-            counts[outcome] += 1
 
-        report = ActionRecoveryReport(
-            scanned=len(action_ids),
-            recovered=counts["recovered"],
-            failed=counts["failed"],
-            deferred=counts["deferred"],
-            skipped=counts["skipped"],
-            errors=counts["error"],
-        )
-        self.last_report = report
-        self.last_completed_at = datetime.now(UTC)
-        return report
+            counts: dict[RecoveryOutcome, int] = {
+                "recovered": 0,
+                "failed": 0,
+                "deferred": 0,
+                "skipped": 0,
+                "error": 0,
+            }
+            for action_id in action_ids:
+                try:
+                    claimed = await claim_action_recovery_attempt(
+                        self._redis,
+                        action_id=action_id,
+                        cooldown_seconds=self._retry_seconds,
+                    )
+                    if not claimed:
+                        counts["deferred"] += 1
+                        continue
+                    outcome = await self._recover_one(action_id)
+                except Exception:
+                    logger.exception(
+                        "Action recovery attempt failed",
+                        extra={"action_id": action_id},
+                    )
+                    outcome = "error"
+                counts[outcome] += 1
+
+            report = ActionRecoveryReport(
+                scanned=len(action_ids),
+                recovered=counts["recovered"],
+                failed=counts["failed"],
+                deferred=counts["deferred"],
+                skipped=counts["skipped"],
+                errors=counts["error"],
+            )
+            span.set_attribute("action.recovery.scanned", report.scanned)
+            span.set_attribute("action.recovery.recovered", report.recovered)
+            span.set_attribute("action.recovery.errors", report.errors)
+            set_span_result(span, "OK" if report.errors == 0 else "PARTIAL_ERROR")
+            self.last_report = report
+            self.last_completed_at = datetime.now(UTC)
+            return report
 
     async def _run_forever(self) -> None:
         while not self._stop_event.is_set():
@@ -236,7 +247,11 @@ class ActionRecoveryWorker:
                     return identity_outcome
 
                 try:
-                    await ActionExecutor(self._repository, caller).reconcile(
+                    await ActionExecutor(
+                        self._repository,
+                        caller,
+                        self._telemetry,
+                    ).reconcile(
                         session,
                         action=action,
                         access_token=credential.access_token,

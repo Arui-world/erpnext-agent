@@ -20,6 +20,7 @@ from erpnext_agent.auth.token_refresh import TokenRefreshError, TokenRefreshServ
 from erpnext_agent.config import Settings
 from erpnext_agent.mcp.adapter import MCPBusinessError, MCPContractError, MCPError
 from erpnext_agent.mcp.refreshing_caller import RefreshingMCPCaller
+from erpnext_agent.observability import Telemetry
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
 
@@ -223,7 +224,11 @@ async def execute_action(
                 status_code=403,
                 detail="Agent session and ERPNext MCP identities do not match",
             )
-        executor = ActionExecutor(repository, caller)
+        executor = ActionExecutor(
+            repository,
+            caller,
+            getattr(request.app.state, "telemetry", None) or Telemetry.disabled(),
+        )
         if record.status == ActionStatus.EXECUTING.value:
             await executor.reconcile(
                 db,

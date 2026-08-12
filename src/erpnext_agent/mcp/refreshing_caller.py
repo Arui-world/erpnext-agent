@@ -13,6 +13,7 @@ from erpnext_agent.mcp.adapter import (
     MCPError,
     MCPTransportError,
 )
+from erpnext_agent.observability import Telemetry, set_span_result
 
 
 class RefreshingMCPCaller:
@@ -44,37 +45,51 @@ class RefreshingMCPCaller:
         discover_first: bool = False,
     ) -> MCPEnvelope:
         del access_token
-        try:
-            return await self._adapter.call_tool(
-                access_token=self._credential.access_token,
-                name=name,
-                arguments=arguments,
-                discover_first=discover_first,
-            )
-        except MCPError as exc:
-            if exc.code != "MCP_AUTH_FAILED":
-                raise
+        telemetry = getattr(self._adapter, "telemetry", None) or Telemetry.disabled()
+        with telemetry.span(
+            "mcp.call",
+            attributes={"tool_name": name, "retry_count": 0},
+        ) as span:
+            try:
+                envelope = await self._adapter.call_tool(
+                    access_token=self._credential.access_token,
+                    name=name,
+                    arguments=arguments,
+                    discover_first=discover_first,
+                )
+            except MCPError as exc:
+                if exc.code != "MCP_AUTH_FAILED":
+                    set_span_result(span, exc.code, error=True)
+                    raise
+            else:
+                set_span_result(span, "OK")
+                return envelope
 
-        try:
-            self._credential = await self._refresh_service.refresh_after_auth_failure(
-                self._db,
-                self._credential,
-            )
-        except TokenRefreshError as exc:
-            await self._session_store.delete(self._agent_session_id)
-            raise MCPTransportError(
-                "ERPNext authentication expired; please sign in again",
-                code="MCP_AUTH_FAILED",
-            ) from exc
-
-        try:
-            return await self._adapter.call_tool(
-                access_token=self._credential.access_token,
-                name=name,
-                arguments=arguments,
-                discover_first=discover_first,
-            )
-        except MCPError as exc:
-            if exc.code == "MCP_AUTH_FAILED":
+            span.set_attribute("retry_count", 1)
+            try:
+                self._credential = await self._refresh_service.refresh_after_auth_failure(
+                    self._db,
+                    self._credential,
+                )
+            except TokenRefreshError as exc:
                 await self._session_store.delete(self._agent_session_id)
-            raise
+                set_span_result(span, "MCP_AUTH_FAILED", error=True)
+                raise MCPTransportError(
+                    "ERPNext authentication expired; please sign in again",
+                    code="MCP_AUTH_FAILED",
+                ) from exc
+
+            try:
+                envelope = await self._adapter.call_tool(
+                    access_token=self._credential.access_token,
+                    name=name,
+                    arguments=arguments,
+                    discover_first=discover_first,
+                )
+            except MCPError as exc:
+                if exc.code == "MCP_AUTH_FAILED":
+                    await self._session_store.delete(self._agent_session_id)
+                set_span_result(span, exc.code, error=True)
+                raise
+            set_span_result(span, "OK")
+            return envelope

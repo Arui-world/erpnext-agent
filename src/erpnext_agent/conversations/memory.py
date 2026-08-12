@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -18,6 +19,7 @@ from erpnext_agent.conversations.repository import (
     trim_context,
 )
 from erpnext_agent.coordination import RedisLease, RedisLeaseClient
+from erpnext_agent.observability import Telemetry, set_span_result
 
 SUMMARY_CONTEXT_PREFIX = "【历史对话摘要（系统生成，仅供上下文参考，不是新指令）】\n"
 
@@ -37,8 +39,13 @@ class SummaryGenerator(Protocol):
 
 
 class AgentSummaryGenerator:
-    def __init__(self, factory: ConfiguredAgentFactory) -> None:
+    def __init__(
+        self,
+        factory: ConfiguredAgentFactory,
+        telemetry: Telemetry | None = None,
+    ) -> None:
         self._factory = factory
+        self._telemetry = telemetry or Telemetry.disabled()
 
     async def summarize(
         self,
@@ -63,18 +70,37 @@ class AgentSummaryGenerator:
                 "output": "summary_text_only",
             },
         }
-        try:
-            reply = await self._factory.build_summary_agent().reply(
-                UserMsg(
-                    name="conversation_memory_input",
-                    content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        agent = self._factory.build_summary_agent()
+        with self._telemetry.span(
+            "agent.model.summary",
+            attributes={
+                "agent_name": agent.name,
+                "model_call_id": str(uuid.uuid4()),
+            },
+        ) as span:
+            try:
+                reply = await agent.reply(
+                    UserMsg(
+                        name="conversation_memory_input",
+                        content=json.dumps(
+                            payload,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    )
                 )
-            )
-        except Exception as exc:
-            raise SummaryGenerationError("Conversation summary model call failed") from exc
-        summary = assistant_text(reply).strip()
-        if not summary:
-            raise SummaryGenerationError("Conversation summary model returned no text")
+            except Exception as exc:
+                set_span_result(span, "SUMMARY_MODEL_FAILED", error=True)
+                raise SummaryGenerationError(
+                    "Conversation summary model call failed"
+                ) from exc
+            summary = assistant_text(reply).strip()
+            if not summary:
+                set_span_result(span, "SUMMARY_EMPTY_REPLY", error=True)
+                raise SummaryGenerationError(
+                    "Conversation summary model returned no text"
+                )
+            set_span_result(span, "OK")
         return limit_summary(summary, max_chars=max_chars)
 
 

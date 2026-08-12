@@ -16,6 +16,11 @@ from erpnext_agent.mcp.adapter import (
     MCPError,
 )
 from erpnext_agent.mcp.tool_bridge import MCPToolCaller
+from erpnext_agent.observability import (
+    Telemetry,
+    normalized_technical_value,
+    set_span_result,
+)
 
 
 class ActionExecutor:
@@ -25,9 +30,15 @@ class ActionExecutor:
         {"IDEMPOTENCY_IN_PROGRESS", "IDEMPOTENCY_UNAVAILABLE"}
     )
 
-    def __init__(self, repository: ActionRepository, caller: MCPToolCaller) -> None:
+    def __init__(
+        self,
+        repository: ActionRepository,
+        caller: MCPToolCaller,
+        telemetry: Telemetry | None = None,
+    ) -> None:
         self._repository = repository
         self._caller = caller
+        self._telemetry = telemetry or Telemetry.disabled()
 
     async def execute(
         self,
@@ -36,20 +47,40 @@ class ActionExecutor:
         action: ActionRecord,
         access_token: str,
     ) -> MCPEnvelope:
-        self._validate_arguments_digest(action)
-        claimed = await self._repository.claim_execution(session, action.action_id)
-        if not claimed:
-            raise ActionStateError("Action is not approved or is already executing")
-        await session.flush()
+        with self._telemetry.span(
+            "action.execute",
+            attributes={"action_id": action.action_id, "tool_name": action.tool_name},
+        ) as span:
+            try:
+                self._validate_arguments_digest(action)
+                claimed = await self._repository.claim_execution(
+                    session,
+                    action.action_id,
+                )
+                if not claimed:
+                    raise ActionStateError(
+                        "Action is not approved or is already executing"
+                    )
+                await session.flush()
 
-        # Commit the EXECUTING transition before sending a side-effecting request. The
-        # recovery worker must reuse this Action and idempotency key after a crash.
-        await session.commit()
-        return await self._write_and_verify(
-            session,
-            action=action,
-            access_token=access_token,
-        )
+                # Commit before the side effect so recovery reuses this Action and key.
+                await session.commit()
+                envelope = await self._write_and_verify(
+                    session,
+                    action=action,
+                    access_token=access_token,
+                )
+            except (MCPError, ActionStateError) as exc:
+                code = exc.code if isinstance(exc, MCPError) else "ACTION_STATE_INVALID"
+                if isinstance(exc, MCPError) and exc.trace_id:
+                    span.set_attribute(
+                        "mcp_trace_id",
+                        normalized_technical_value(exc.trace_id),
+                    )
+                set_span_result(span, code, error=True)
+                raise
+            self._set_success_attributes(span, action)
+            return envelope
 
     async def reconcile(
         self,
@@ -60,14 +91,41 @@ class ActionExecutor:
     ) -> MCPEnvelope:
         """Retry an uncertain EXECUTING Action with its original key and parameters."""
 
-        self._validate_arguments_digest(action)
-        if action.status != ActionStatus.EXECUTING.value:
-            raise ActionStateError("Only an EXECUTING Action can be reconciled")
-        return await self._write_and_verify(
-            session,
-            action=action,
-            access_token=access_token,
-        )
+        with self._telemetry.span(
+            "action.reconcile",
+            attributes={"action_id": action.action_id, "tool_name": action.tool_name},
+        ) as span:
+            try:
+                self._validate_arguments_digest(action)
+                if action.status != ActionStatus.EXECUTING.value:
+                    raise ActionStateError(
+                        "Only an EXECUTING Action can be reconciled"
+                    )
+                envelope = await self._write_and_verify(
+                    session,
+                    action=action,
+                    access_token=access_token,
+                )
+            except (MCPError, ActionStateError) as exc:
+                code = exc.code if isinstance(exc, MCPError) else "ACTION_STATE_INVALID"
+                if isinstance(exc, MCPError) and exc.trace_id:
+                    span.set_attribute(
+                        "mcp_trace_id",
+                        normalized_technical_value(exc.trace_id),
+                    )
+                set_span_result(span, code, error=True)
+                raise
+            self._set_success_attributes(span, action)
+            return envelope
+
+    @staticmethod
+    def _set_success_attributes(span: Any, action: ActionRecord) -> None:
+        if action.mcp_trace_id:
+            span.set_attribute(
+                "mcp_trace_id",
+                normalized_technical_value(action.mcp_trace_id),
+            )
+        set_span_result(span, "SUCCEEDED")
 
     async def _write_and_verify(
         self,
