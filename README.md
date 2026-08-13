@@ -30,6 +30,7 @@
 - PKCE、MCP 响应、工具隔离、意图门控、参数哈希和日志脱敏单元测试。
 - 版本化离线策略评估 Runner、首批 20 个场景、分类指标和逐场景证据报告。
 - 可选 OpenTelemetry OTLP/HTTP Trace，覆盖 HTTP、模型、MCP、Action、恢复和保留清理边界。
+- 本地 Compose 可选启动 OpenTelemetry Collector 与 Jaeger，浏览器查看 Trace。
 
 `POST /api/v1/chat` 已能对查询和巡检请求执行用户专属的模型/工具循环；
 `POST /api/v1/chat/stream` 提供文本、工具状态和待审批 Action SSE。创建或修改草稿时，
@@ -227,6 +228,29 @@ MODEL_BASE_URL=https://model-service.example/v1
 `openai_compatible` 必须明确配置 `MODEL_BASE_URL`。服务的 `/health/ready` 会返回不包含密钥的
 `model_configured` 状态。模型内部重试关闭，统一由 `MODEL_MAX_RETRIES` 配置 Agent 层重试，
 避免两层重试叠加。
+
+### 本地启用 OpenTelemetry
+
+项目的 Compose 文件包含本地 `otel-collector` 和 `jaeger` 服务。将 `.env` 中的配置改为：
+
+```dotenv
+OTEL_ENABLED=true
+OTEL_SERVICE_NAME=erpnext-agent
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
+OTEL_EXPORT_TIMEOUT_SECONDS=5
+```
+
+然后执行：
+
+```bash
+docker compose --env-file .env up -d
+curl http://localhost:8001/health/ready
+```
+
+确认返回 `"otel_tracing": true` 后，访问页面或调用接口产生请求，再打开
+`http://localhost:16686`，在 Jaeger 的 Service 下选择 `erpnext-agent` 查看 Trace。
+Collector 只负责接收和转发，Jaeger 是本地开发查看端；两者均使用内存存储，重启后历史
+Trace 会清空。生产环境应替换为固定版本镜像和持久化 Trace 后端。
 
 仅验证模型连通性（会实际请求模型服务并产生相应 Token 用量）：
 
