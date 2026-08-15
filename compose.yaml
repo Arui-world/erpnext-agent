@@ -96,6 +96,49 @@ services:
       retries: 5
       start_period: 20s
 
+  eval:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: erpnext-agent:local
+    restart: "no"
+    profiles: ["tools"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-erpnext_agent}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-erpnext_agent}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      OTEL_ENABLED: "false"
+    command:
+      [
+        "python",
+        "-m",
+        "erpnext_agent.evaluation.runner",
+        "--suite",
+        "evaluations/scenarios/online_authenticated_v1.json",
+      ]
+    volumes:
+      - ./evaluations/reports:/app/evaluations/reports
+    depends_on:
+      agent:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - default
+      - erpnext
+
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped

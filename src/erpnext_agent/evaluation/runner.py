@@ -268,7 +268,10 @@ def main() -> None:
     except EvaluationSuiteError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2) from exc
-    report = EvaluationRunner().run(suite)
+    if suite.execution_mode == "online_authenticated":
+        report = _run_online_suite(suite)
+    else:
+        report = EvaluationRunner().run(suite)
     json_content = json.dumps(
         report.model_dump(mode="json"),
         ensure_ascii=False,
@@ -281,6 +284,22 @@ def main() -> None:
         write_report(arguments.markdown_report, report_markdown(report))
     print(json_content, end="")
     raise SystemExit(0 if report.summary.threshold_passed else 1)
+
+
+def _run_online_suite(suite: EvaluationSuite) -> EvaluationReport:
+    # Imported lazily so the offline path never pulls in httpx / redis / sqlalchemy.
+    import asyncio
+
+    from erpnext_agent.evaluation.online import (
+        OnlineEnvironmentError,
+        OnlineEvaluationRunner,
+    )
+
+    try:
+        return asyncio.run(OnlineEvaluationRunner().run(suite))
+    except OnlineEnvironmentError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(3) from exc
 
 
 if __name__ == "__main__":

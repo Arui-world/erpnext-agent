@@ -16,6 +16,11 @@ EvaluationCategory = Literal[
     "security_negative",
 ]
 AgentName = Literal["data_agent", "action_agent", "patrol_agent", "orchestrator"]
+ExecutionMode = Literal["offline_deterministic", "online_authenticated"]
+OnlineIdentity = Literal["primary", "secondary"]
+WritableDoctype = Literal["Sales Order", "Purchase Order", "Material Request"]
+OFFLINE_EXECUTORS = frozenset({"intent_route", "tool_policy", "action_validation", "mcp_envelope"})
+ONLINE_EXECUTORS = frozenset({"live_chat", "live_draft_action"})
 
 
 class StrictModel(BaseModel):
@@ -119,8 +124,74 @@ class MCPEnvelopeCase(CaseBase):
     expected: MCPEnvelopeExpected
 
 
+class LiveChatTurn(StrictModel):
+    message: str = Field(min_length=1, max_length=16_000)
+    expected_tools: list[str] = Field(default_factory=list, max_length=20)
+
+
+class LiveChatInput(StrictModel):
+    identity: OnlineIdentity = "primary"
+    turns: list[LiveChatTurn] = Field(min_length=1, max_length=5)
+
+
+class LiveChatExpected(StrictModel):
+    expected_tools: list[str] = Field(default_factory=list, max_length=20)
+    forbidden_tools: list[str] = Field(default_factory=list, max_length=20)
+    text_must_contain: list[str] = Field(default_factory=list, max_length=20)
+    text_must_contain_any: list[str] = Field(default_factory=list, max_length=20)
+    text_must_not_contain: list[str] = Field(default_factory=list, max_length=20)
+    optional_env_facts: list[str] = Field(default_factory=list, max_length=10)
+    allow_permission_denied: bool = False
+    expect_error: bool = False
+
+
+class LiveChatCase(CaseBase):
+    executor: Literal["live_chat"]
+    input: LiveChatInput
+    expected: LiveChatExpected
+
+
+class LiveDraftActionInput(StrictModel):
+    identity: OnlineIdentity = "primary"
+    message: str = Field(min_length=1, max_length=16_000)
+    doctype: WritableDoctype
+
+
+class LiveDraftActionExpected(StrictModel):
+    decision: Literal["approve", "reject"]
+    cross_user_identity: OnlineIdentity | None = None
+    expect_execute_success: bool = False
+    expect_cleanup: bool = False
+
+    @model_validator(mode="after")
+    def validate_flow(self) -> LiveDraftActionExpected:
+        if self.decision == "reject" and (self.expect_execute_success or self.expect_cleanup):
+            raise ValueError("rejected draft cases cannot expect execution or cleanup")
+        return self
+
+
+class LiveDraftActionCase(CaseBase):
+    executor: Literal["live_draft_action"]
+    input: LiveDraftActionInput
+    expected: LiveDraftActionExpected
+
+    @model_validator(mode="after")
+    def cross_user_differs_from_owner(self) -> LiveDraftActionCase:
+        if (
+            self.expected.cross_user_identity is not None
+            and self.expected.cross_user_identity == self.input.identity
+        ):
+            raise ValueError("cross_user_identity must differ from the case identity")
+        return self
+
+
 EvaluationCase = Annotated[
-    IntentRouteCase | ToolPolicyCase | ActionValidationCase | MCPEnvelopeCase,
+    IntentRouteCase
+    | ToolPolicyCase
+    | ActionValidationCase
+    | MCPEnvelopeCase
+    | LiveChatCase
+    | LiveDraftActionCase,
     Field(discriminator="executor"),
 ]
 
@@ -129,7 +200,7 @@ class EvaluationSuite(StrictModel):
     schema_version: Literal[1]
     suite_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{2,79}$")
     description: str = Field(min_length=1, max_length=1000)
-    execution_mode: Literal["offline_deterministic"]
+    execution_mode: ExecutionMode
     thresholds: SuiteThresholds
     cases: list[EvaluationCase] = Field(min_length=1, max_length=500)
 
@@ -141,6 +212,23 @@ class EvaluationSuite(StrictModel):
         )
         if duplicates:
             raise ValueError(f"duplicate evaluation case IDs: {duplicates}")
+        return self
+
+    @model_validator(mode="after")
+    def executors_match_execution_mode(self) -> EvaluationSuite:
+        allowed = (
+            OFFLINE_EXECUTORS
+            if self.execution_mode == "offline_deterministic"
+            else ONLINE_EXECUTORS
+        )
+        mismatched = sorted(
+            case.case_id for case in self.cases if case.executor not in allowed
+        )
+        if mismatched:
+            raise ValueError(
+                f"cases use executors that do not match execution_mode "
+                f"{self.execution_mode}: {mismatched}"
+            )
         return self
 
 
@@ -174,7 +262,7 @@ class EvaluationReport(StrictModel):
     report_schema_version: Literal[1] = 1
     suite_id: str
     suite_schema_version: int
-    execution_mode: Literal["offline_deterministic"]
+    execution_mode: ExecutionMode
     generated_at: datetime
     disclaimer: str
     thresholds: SuiteThresholds

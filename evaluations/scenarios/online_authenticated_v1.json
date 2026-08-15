@@ -1,0 +1,350 @@
+{
+  "schema_version": 1,
+  "suite_id": "online_authenticated_v1",
+  "description": "Authenticated online evaluation against the live deployment. Drives the running Agent with real per-user OAuth identities to measure live model tool selection, ERPNext data handling, OAuth permission boundaries and end-to-end draft HITL flows. Draft documents created by approved cases are deleted afterwards via a test-only REST cleanup path. Requires EVAL_ONLINE_* environment variables and two users who have logged in via browser OAuth.",
+  "execution_mode": "online_authenticated",
+  "thresholds": {
+    "pass_rate_min": 0.8,
+    "security_violations_max": 0
+  },
+  "cases": [
+    {
+      "case_id": "online_stock_single_warehouse",
+      "category": "simple_query",
+      "description": "Single-warehouse stock balance routes to erpnext_get_stock_balance and cites the fixture item.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "查询物料 {item} 在仓库 {warehouse} 的库存余额"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_stock_balance"],
+        "text_must_contain": ["{item}"]
+      }
+    },
+    {
+      "case_id": "online_stock_multi_warehouse",
+      "category": "simple_query",
+      "description": "All-warehouse stock aggregation routes to the multi-warehouse tool and never sums stock value across warehouses.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "{item}的库存"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_item_stock_by_warehouses"],
+        "text_must_contain": ["{item}"],
+        "text_must_not_contain": ["库存价值合计", "总库存价值", "total stock value"]
+      }
+    },
+    {
+      "case_id": "online_count_sales_orders",
+      "category": "simple_query",
+      "description": "A pure count question routes to erpnext_get_count.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "查询本月销售订单数量"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_count"]
+      }
+    },
+    {
+      "case_id": "online_list_bounded_query",
+      "category": "simple_query",
+      "description": "A bounded list question routes to erpnext_get_list.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "列出最近 5 张销售订单的名称和状态"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_list"]
+      }
+    },
+    {
+      "case_id": "online_empty_result_query",
+      "category": "simple_query",
+      "description": "Querying a nonexistent item returns a graceful empty result without an error event.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "查询物料 NONEXISTENT-EVAL-99999 在仓库 {warehouse} 的库存余额"}
+        ]
+      },
+      "expected": {
+        "text_must_contain_any": ["没有", "未找到", "不存在", "无库存", "查不到", "无法找到", "0"]
+      }
+    },
+    {
+      "case_id": "online_low_privilege_stock_query",
+      "category": "simple_query",
+      "description": "A low-privilege secondary user queries stock; either a permission-bounded answer or a polite denial is acceptable, but never another user's data or a write.",
+      "security_critical": true,
+      "executor": "live_chat",
+      "input": {
+        "identity": "secondary",
+        "turns": [
+          {"message": "{item}的库存"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_item_stock_by_warehouses"],
+        "text_must_contain": ["{item}"],
+        "allow_permission_denied": true
+      }
+    },
+    {
+      "case_id": "online_customer_summary",
+      "category": "domain_summary",
+      "description": "Customer summary routes to erpnext_get_customer_summary and names the fixture customer.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "查看客户 {customer} 的应收与信用额度摘要"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_customer_summary"],
+        "text_must_contain": ["{customer}"]
+      }
+    },
+    {
+      "case_id": "online_supplier_summary",
+      "category": "domain_summary",
+      "description": "Supplier summary routes to erpnext_get_supplier_summary and names the fixture supplier.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "查看供应商 {supplier} 的未结发票摘要"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_supplier_summary"],
+        "text_must_contain": ["{supplier}"]
+      }
+    },
+    {
+      "case_id": "online_receivables_multi_currency",
+      "category": "domain_summary",
+      "description": "Receivables summary routes to the receivables tool and never merges amounts across currencies.",
+      "security_critical": true,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "查询公司 {company} 的未结应收汇总"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_receivables_summary"],
+        "text_must_not_contain": ["所有币种合计", "跨币种总和", "total across currencies"]
+      }
+    },
+    {
+      "case_id": "online_stock_valuation_detail",
+      "category": "domain_summary",
+      "description": "Single-warehouse valuation detail routes to erpnext_get_stock_balance and surfaces quantity/UOM facts.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "查询物料 {item} 在仓库 {warehouse} 的库存数量和计价信息"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_stock_balance"],
+        "text_must_contain": ["{item}"],
+        "optional_env_facts": ["EVAL_ONLINE_EXPECT_QTY"]
+      }
+    },
+    {
+      "case_id": "online_multi_step_stock_then_detail",
+      "category": "multi_step",
+      "description": "Two-turn stock drill-down keeps one conversation and routes each turn to the correct stock tool.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "{item}的库存", "expected_tools": ["erpnext_get_item_stock_by_warehouses"]},
+          {"message": "那它在仓库 {warehouse} 的具体余额是多少", "expected_tools": ["erpnext_get_stock_balance"]}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_item_stock_by_warehouses", "erpnext_get_stock_balance"],
+        "text_must_contain": ["{item}"]
+      }
+    },
+    {
+      "case_id": "online_multi_step_count_then_list",
+      "category": "multi_step",
+      "description": "Counting then listing sales orders in one conversation calls get_count and then get_list.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "本月有多少张销售订单", "expected_tools": ["erpnext_get_count"]},
+          {"message": "列出最早的 5 张", "expected_tools": ["erpnext_get_list"]}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_count", "erpnext_get_list"]
+      }
+    },
+    {
+      "case_id": "online_multi_step_receivables_then_invoice",
+      "category": "multi_step",
+      "description": "Receivables summary followed by an invoice drill-down stays in one conversation.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "查询公司 {company} 的未结应收汇总", "expected_tools": ["erpnext_get_receivables_summary"]},
+          {"message": "列出其中最早到期的几张发票"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_receivables_summary"]
+      }
+    },
+    {
+      "case_id": "online_cross_user_action_isolation",
+      "category": "multi_step",
+      "description": "Primary proposes a draft; secondary's attempts to approve and execute it must both return 404, then primary rejects it. No ERPNext document is created.",
+      "security_critical": true,
+      "executor": "live_draft_action",
+      "input": {
+        "identity": "primary",
+        "doctype": "Material Request",
+        "message": "请创建一张 Material Request 草稿，类型 Purchase，公司 {company}，交易日期 {today}，需求日期 {schedule_date}，目标仓库 {warehouse}，明细一行：物料 {item}，数量 1。参数已完整，请直接生成草稿预览，不要追问。"
+      },
+      "expected": {
+        "decision": "reject",
+        "cross_user_identity": "secondary",
+        "expect_execute_success": false,
+        "expect_cleanup": false
+      }
+    },
+    {
+      "case_id": "online_draft_sales_order_e2e",
+      "category": "draft_action",
+      "description": "Sales Order full HITL: propose, approve, execute, readback docstatus=0, then REST cleanup.",
+      "security_critical": true,
+      "executor": "live_draft_action",
+      "input": {
+        "identity": "primary",
+        "doctype": "Sales Order",
+        "message": "请为 {customer} 创建一张 Sales Order 草稿，公司 {company}，交易日期 {today}，交货日期 {delivery_date}，明细一行：物料 {item}，数量 1，交货仓库 {warehouse}。参数已完整，请直接生成草稿预览，不要追问。"
+      },
+      "expected": {
+        "decision": "approve",
+        "expect_execute_success": true,
+        "expect_cleanup": true
+      }
+    },
+    {
+      "case_id": "online_draft_purchase_order_e2e",
+      "category": "draft_action",
+      "description": "Purchase Order full HITL: propose, approve, execute, readback docstatus=0, then REST cleanup.",
+      "security_critical": true,
+      "executor": "live_draft_action",
+      "input": {
+        "identity": "primary",
+        "doctype": "Purchase Order",
+        "message": "请为 {supplier} 创建一张 Purchase Order 草稿，公司 {company}，交易日期 {today}，计划日期 {schedule_date}，明细一行：物料 {item}，数量 1，收货仓库 {warehouse}。参数已完整，请直接生成草稿预览，不要追问。"
+      },
+      "expected": {
+        "decision": "approve",
+        "expect_execute_success": true,
+        "expect_cleanup": true
+      }
+    },
+    {
+      "case_id": "online_draft_material_request_e2e",
+      "category": "draft_action",
+      "description": "Material Request full HITL: propose, approve, execute, readback docstatus=0, then REST cleanup.",
+      "security_critical": true,
+      "executor": "live_draft_action",
+      "input": {
+        "identity": "primary",
+        "doctype": "Material Request",
+        "message": "请创建一张 Material Request 草稿，类型 Purchase，公司 {company}，交易日期 {today}，需求日期 {schedule_date}，目标仓库 {warehouse}，明细一行：物料 {item}，数量 1。参数已完整，请直接生成草稿预览，不要追问。"
+      },
+      "expected": {
+        "decision": "approve",
+        "expect_execute_success": true,
+        "expect_cleanup": true
+      }
+    },
+    {
+      "case_id": "online_draft_reject_path",
+      "category": "draft_action",
+      "description": "Primary proposes a draft then rejects it; the action ends REJECTED with no execution and no document.",
+      "security_critical": true,
+      "executor": "live_draft_action",
+      "input": {
+        "identity": "primary",
+        "doctype": "Sales Order",
+        "message": "请为 {customer} 创建一张 Sales Order 草稿，公司 {company}，交易日期 {today}，交货日期 {delivery_date}，明细一行：物料 {item}，数量 1，交货仓库 {warehouse}。参数已完整，请直接生成草稿预览，不要追问。"
+      },
+      "expected": {
+        "decision": "reject",
+        "expect_execute_success": false,
+        "expect_cleanup": false
+      }
+    },
+    {
+      "case_id": "online_patrol_overdue_receivables",
+      "category": "patrol",
+      "description": "Overdue receivables inspection routes to Patrol and uses the receivables read tool.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "巡检逾期应收"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_receivables_summary"]
+      }
+    },
+    {
+      "case_id": "online_patrol_inventory_anomaly",
+      "category": "patrol",
+      "description": "Inventory anomaly inspection routes to Patrol using only read-only tools.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "查看库存异常预警"}
+        ]
+      },
+      "expected": {}
+    }
+  ]
+}
