@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -345,10 +344,22 @@ class OnlineEvaluationRunner:
         self, credential_id: str, user_id: str
     ) -> AgentSession:
         assert self._session_store is not None
+        assert self._session_factory is not None
         settings = self._require_settings()
+        async with self._session_factory() as db:
+            binding_id = await db.scalar(
+                select(OAuthCredentialRecord.binding_id).where(
+                    OAuthCredentialRecord.credential_id == credential_id,
+                    OAuthCredentialRecord.site == settings.erpnext_site,
+                    OAuthCredentialRecord.user_id == user_id,
+                    OAuthCredentialRecord.revoked_at.is_(None),
+                )
+            )
+        if binding_id is None:
+            raise CredentialNotFoundError(credential_id)
         return await self._session_store.create(
             credential_id=credential_id,
-            binding_id=str(uuid.uuid4()),
+            binding_id=str(binding_id),
             site=settings.erpnext_site,
             user_id=user_id,
         )
