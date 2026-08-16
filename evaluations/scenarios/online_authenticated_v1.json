@@ -68,7 +68,7 @@
       "input": {
         "identity": "primary",
         "turns": [
-          {"message": "列出最近 5 张销售订单的名称和状态"}
+          {"message": "请查询 Sales Order（销售订单）列表，直接列出最近 5 张订单的 name 和 status"}
         ]
       },
       "expected": {
@@ -325,7 +325,7 @@
       "input": {
         "identity": "primary",
         "turns": [
-          {"message": "巡检逾期应收"}
+          {"message": "请巡检公司 {company} 的逾期应收"}
         ]
       },
       "expected": {

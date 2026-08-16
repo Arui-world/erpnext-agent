@@ -439,6 +439,7 @@ class ActionProposalTool(ToolBase):
         arguments = kwargs.get("arguments")
         if not isinstance(tool_name, str) or not isinstance(arguments, dict):
             return _error_chunk("INVALID_ACTION_PROPOSAL", "Invalid proposal tool arguments")
+        arguments = _normalize_model_arguments(arguments)
         try:
             self.record = await self._service.propose(
                 self._session,
@@ -464,6 +465,49 @@ class ActionProposalTool(ToolBase):
             state=ToolResultState.SUCCESS,
             metadata={"action_id": self.record.action_id},
         )
+
+
+def _normalize_model_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Accept the common flat tool-call shape while retaining strict validation.
+
+    Some OpenAI-compatible models place draft fields beside ``doctype`` instead of
+    nesting them under ``payload``. Convert only that transport shape here; the
+    regular ``validate_action_arguments`` whitelist remains the authority for every
+    field and required value.
+    """
+    if "payload" in arguments or "doctype" not in arguments:
+        return _normalize_item_aliases(arguments)
+    envelope = {key: arguments[key] for key in ("doctype", "name", "expected_modified") if key in arguments}
+    envelope["payload"] = {
+        key: value
+        for key, value in arguments.items()
+        if key not in {"doctype", "name", "expected_modified", "idempotency_key"}
+    }
+    return _normalize_item_aliases(envelope)
+
+
+def _normalize_item_aliases(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Map common model wording to the canonical ERPNext item field names."""
+    payload = arguments.get("payload")
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return arguments
+    changed = False
+    items: list[Any] = []
+    for item in payload["items"]:
+        if not isinstance(item, dict) or "delivery_warehouse" not in item:
+            items.append(item)
+            continue
+        normalized = dict(item)
+        normalized.setdefault("warehouse", normalized.pop("delivery_warehouse"))
+        changed = True
+        items.append(normalized)
+    if not changed:
+        return arguments
+    normalized_arguments = dict(arguments)
+    normalized_payload = dict(payload)
+    normalized_payload["items"] = items
+    normalized_arguments["payload"] = normalized_payload
+    return normalized_arguments
 
 
 def _normalize_payload(payload: dict[str, Any], definition: DraftDefinition) -> dict[str, Any]:
