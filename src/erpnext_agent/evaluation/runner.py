@@ -257,36 +257,79 @@ def default_suite_path() -> Path:
     return Path(__file__).resolve().parents[3] / "evaluations/scenarios/offline_policy_v1.json"
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run versioned ERPNext Agent evaluations")
-    parser.add_argument("--suite", type=Path, default=default_suite_path())
-    parser.add_argument("--json-report", type=Path)
-    parser.add_argument("--markdown-report", type=Path)
-    arguments = parser.parse_args()
-    try:
-        suite = load_suite(arguments.suite)
-    except EvaluationSuiteError as exc:
-        print(str(exc), file=sys.stderr)
-        raise SystemExit(2) from exc
-    if suite.execution_mode == "online_authenticated":
-        report = _run_online_suite(suite)
-    else:
-        report = EvaluationRunner().run(suite)
-    json_content = json.dumps(
+def _report_json(report: EvaluationReport) -> str:
+    return json.dumps(
         report.model_dump(mode="json"),
         ensure_ascii=False,
         indent=2,
         sort_keys=True,
     ) + "\n"
-    if arguments.json_report:
-        write_report(arguments.json_report, json_content)
-    if arguments.markdown_report:
-        write_report(arguments.markdown_report, report_markdown(report))
-    print(json_content, end="")
+
+
+def _indexed_path(path: Path, index: int) -> Path:
+    return path.with_name(f"{path.stem}_run{index}{path.suffix}")
+
+
+def _write_report_files(
+    report: EvaluationReport,
+    json_path: Path | None,
+    markdown_path: Path | None,
+) -> None:
+    if json_path:
+        write_report(json_path, _report_json(report))
+    if markdown_path:
+        write_report(markdown_path, report_markdown(report))
+
+
+def _aggregate_exit_code(reports: list[EvaluationReport]) -> int:
+    # Worst run wins: any run below threshold fails the whole acceptance gate.
+    return 0 if all(report.summary.threshold_passed for report in reports) else 1
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run versioned ERPNext Agent evaluations")
+    parser.add_argument("--suite", type=Path, default=default_suite_path())
+    parser.add_argument("--json-report", type=Path)
+    parser.add_argument("--markdown-report", type=Path)
+    parser.add_argument("--repeat", type=int, default=1)
+    arguments = parser.parse_args()
+    if arguments.repeat < 1:
+        print("--repeat must be a positive integer", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        suite = load_suite(arguments.suite)
+    except EvaluationSuiteError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+
+    if suite.execution_mode == "online_authenticated":
+        reports = _run_online_suite(suite, arguments.repeat)
+        if arguments.repeat == 1:
+            _write_report_files(reports[0], arguments.json_report, arguments.markdown_report)
+            print(_report_json(reports[0]), end="")
+        else:
+            for index, report in enumerate(reports, start=1):
+                json_path = (
+                    _indexed_path(arguments.json_report, index)
+                    if arguments.json_report
+                    else None
+                )
+                markdown_path = (
+                    _indexed_path(arguments.markdown_report, index)
+                    if arguments.markdown_report
+                    else None
+                )
+                _write_report_files(report, json_path, markdown_path)
+                print(_report_json(report), end="")
+        raise SystemExit(_aggregate_exit_code(reports))
+
+    report = EvaluationRunner().run(suite)
+    _write_report_files(report, arguments.json_report, arguments.markdown_report)
+    print(_report_json(report), end="")
     raise SystemExit(0 if report.summary.threshold_passed else 1)
 
 
-def _run_online_suite(suite: EvaluationSuite) -> EvaluationReport:
+def _run_online_suite(suite: EvaluationSuite, repeat: int) -> list[EvaluationReport]:
     # Imported lazily so the offline path never pulls in httpx / redis / sqlalchemy.
     import asyncio
 
@@ -295,11 +338,15 @@ def _run_online_suite(suite: EvaluationSuite) -> EvaluationReport:
         OnlineEvaluationRunner,
     )
 
+    reports: list[EvaluationReport] = []
     try:
-        return asyncio.run(OnlineEvaluationRunner().run(suite))
+        for _ in range(repeat):
+            # A fresh runner per run isolates connections and draft cleanup.
+            reports.append(asyncio.run(OnlineEvaluationRunner().run(suite)))
     except OnlineEnvironmentError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(3) from exc
+    return reports
 
 
 if __name__ == "__main__":

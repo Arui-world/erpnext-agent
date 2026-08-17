@@ -117,6 +117,12 @@ services:
         "erpnext_agent.evaluation.runner",
         "--suite",
         "evaluations/scenarios/online_authenticated_v1.json",
+        "--repeat",
+        "${EVAL_REPEAT:-1}",
+        "--json-report",
+        "evaluations/reports/online_authenticated_v1.json",
+        "--markdown-report",
+        "evaluations/reports/online_authenticated_v1.md",
       ]
     volumes:
       - ./evaluations/reports:/app/evaluations/reports

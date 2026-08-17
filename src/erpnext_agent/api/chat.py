@@ -590,6 +590,7 @@ async def _prepare_runtime(
                 requested_by=session.user_id,
                 access_token=credential.access_token,
                 conversation_id=action_conversation_id,
+                telemetry=cast(Telemetry, request.app.state.telemetry),
             )
         try:
             return await runtime_factory.prepare(

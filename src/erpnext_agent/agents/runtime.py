@@ -41,9 +41,11 @@ class AgentRuntimeFactory:
         *,
         agent_factory: ConfiguredAgentFactory,
         adapter: ERPNextMCPAdapter,
+        loop_guard_max_repeats: int = 3,
     ) -> None:
         self._agent_factory = agent_factory
         self._adapter = adapter
+        self._loop_guard_max_repeats = loop_guard_max_repeats
         self._toolkit_factory = ERPNextToolkitFactory(adapter)
 
     async def prepare(
@@ -67,6 +69,7 @@ class AgentRuntimeFactory:
             access_token=access_token,
             caller=tool_caller,
             action_proposal_tool=action_proposal_tool,
+            max_repeats=self._loop_guard_max_repeats,
         )
         bundle = self._agent_factory.build(
             orchestrator_toolkit=toolkits.orchestrator,

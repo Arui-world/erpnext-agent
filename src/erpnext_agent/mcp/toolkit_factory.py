@@ -6,6 +6,7 @@ from typing import Any
 from agentscope.tool import ToolBase, Toolkit
 
 from erpnext_agent.mcp.adapter import ERPNextMCPAdapter
+from erpnext_agent.mcp.loop_guard import LoopGuardTool
 from erpnext_agent.mcp.policy import (
     ACTION_AGENT_TOOLS,
     DATA_AGENT_TOOLS,
@@ -28,9 +29,11 @@ class ERPNextToolkitFactory:
     def __init__(self, adapter: ERPNextMCPAdapter) -> None:
         self._adapter = adapter
 
-    async def build(self, *, access_token: str) -> AgentToolkits:
+    async def build(self, *, access_token: str, max_repeats: int = 3) -> AgentToolkits:
         specs = await self._adapter.discover_tools(access_token)
-        return self.build_from_specs(specs=specs, access_token=access_token)
+        return self.build_from_specs(
+            specs=specs, access_token=access_token, max_repeats=max_repeats
+        )
 
     def build_from_specs(
         self,
@@ -39,6 +42,7 @@ class ERPNextToolkitFactory:
         access_token: str,
         caller: MCPToolCaller | None = None,
         action_proposal_tool: ToolBase | None = None,
+        max_repeats: int = 3,
     ) -> AgentToolkits:
         by_name: dict[str, dict[str, Any]] = {}
         for spec in specs:
@@ -55,14 +59,16 @@ class ERPNextToolkitFactory:
             missing = allowed - by_name.keys()
             if missing:
                 raise ValueError(f"MCP contract is missing tools: {sorted(missing)}")
-            tools: list[ToolBase] = [
-                ERPNextMCPTool(
+            tools: list[ToolBase] = []
+            for name in sorted(allowed):
+                tool: ToolBase = ERPNextMCPTool(
                     spec=by_name[name],
                     adapter=caller or self._adapter,
                     access_token=access_token,
                 )
-                for name in sorted(allowed)
-            ]
+                if tool.is_read_only:
+                    tool = LoopGuardTool(tool=tool, max_repeats=max_repeats)
+                tools.append(tool)
             for extra in extra_tools or []:
                 if extra.name in by_name or any(tool.name == extra.name for tool in tools):
                     raise ValueError(f"Duplicate Action tool definition: {extra.name}")

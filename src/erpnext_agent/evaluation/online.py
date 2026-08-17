@@ -549,6 +549,7 @@ class OnlineEvaluationRunner:
             "text": text_details,
             "env_facts": fact_details,
             "error_events": error_events,
+            "finished_reasons": [reply.finished_reason for reply in replies],
             "reply_excerpt": full_text[:500],
         }
         if turn_tool_details:
@@ -592,6 +593,7 @@ class OnlineEvaluationRunner:
             "decision": expected.decision,
             "tool_calls": list(reply.tool_calls),
             "proposed": reply.action is not None,
+            "finished_reason": reply.finished_reason,
         }
         if reply.error is not None:
             evidence["error_events"] = [reply.error]
@@ -656,6 +658,8 @@ class OnlineEvaluationRunner:
         )
         evidence["execute_status"] = execute_status
         evidence["execute_result_status"] = execute_body.get("status")
+        if execute_status != 200:
+            evidence["execute_detail"] = execute_body
         result_reference = execute_body.get("result_reference")
         evidence["result_reference"] = (
             result_reference if isinstance(result_reference, dict) else None

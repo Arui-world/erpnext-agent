@@ -703,3 +703,39 @@ def test_cli_exit_code_3_for_missing_online_env(monkeypatch, capsys):
     assert excinfo.value.code == 3
     captured = capsys.readouterr()
     assert "Online evaluation environment is incomplete" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Evidence enrichment
+# ---------------------------------------------------------------------------
+
+
+async def test_live_chat_evidence_includes_finished_reasons():
+    transport = FakeTransport()
+    transport.stream_scripts.append(
+        _sse_lines(
+            [
+                ("conversation", {"conversation_id": "conv-1"}),
+                ("text_delta", {"delta": "widget 库存为 10 Nos"}),
+                ("done", {"finished_reason": "stop"}),
+            ]
+        )
+    )
+    runner = _make_runner(
+        transport, BASE_ENV, credential_ids={"primary@example.com": "cred-1"}
+    )
+    suite = _suite([_chat_case(text_must_contain=["widget"])])
+    report = await runner.run(suite)
+    assert report.cases[0].evidence["finished_reasons"] == ["stop"]
+
+
+async def test_draft_evidence_includes_finished_reason():
+    transport = FakeTransport()
+    transport.stream_scripts.append(_action_stream())
+    transport.post_scripts.append((200, {"status": "REJECTED"}))
+    runner = _make_runner(
+        transport, BASE_ENV, credential_ids={"primary@example.com": "cred-1"}
+    )
+    suite = _suite([_draft_case("reject")])
+    report = await runner.run(suite)
+    assert report.cases[0].evidence["finished_reason"] == "stop"

@@ -7,6 +7,8 @@ from typing import Any, cast
 import pytest
 from agentscope.message import TextBlock, ToolResultState
 from agentscope.permission import PermissionBehavior, PermissionContext
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from erpnext_agent.actions.executor import ActionExecutor
@@ -19,15 +21,19 @@ from erpnext_agent.actions.proposal import (
     ActionProposalError,
     ActionProposalService,
     ActionProposalTool,
+    _coerce_number,
+    _normalize_model_arguments,
     build_action_preview,
     validate_action_arguments,
 )
 from erpnext_agent.actions.repository import ActionRepository, ActionStateError
+from erpnext_agent.config import Settings
 from erpnext_agent.mcp.adapter import (
     MCPBusinessError,
     MCPContractError,
     MCPEnvelope,
 )
+from erpnext_agent.observability import create_telemetry
 
 TEST_ACCESS_TOKEN = "inert-action-token"  # noqa: S105
 
@@ -235,6 +241,178 @@ def test_create_proposal_validates_and_normalizes_payload() -> None:
     assert normalized["payload"]["company"] == "Example Company"
     assert normalized["payload"]["items"][0]["qty"] == 2
     assert "idempotency_key" not in normalized
+
+
+def test_normalize_double_nested_arguments_unwrap() -> None:
+    inner = material_request_arguments()
+    normalized = _normalize_model_arguments({"arguments": inner})
+    assert normalized["doctype"] == "Material Request"
+    assert normalized["payload"]["items"][0]["item_code"] == "ITEM-0001"
+    validate_action_arguments(CREATE_DRAFT_TOOL, normalized)
+
+
+def test_normalize_single_object_items_wrapped_in_list() -> None:
+    arguments = material_request_arguments()
+    arguments["payload"]["items"] = dict(arguments["payload"]["items"][0])
+    normalized = _normalize_model_arguments(arguments)
+    assert isinstance(normalized["payload"]["items"], list)
+    assert normalized["payload"]["items"][0]["item_code"] == "ITEM-0001"
+    validate_action_arguments(CREATE_DRAFT_TOOL, normalized)
+
+
+def test_normalize_qty_numeric_string_coercion() -> None:
+    arguments = material_request_arguments()
+    arguments["payload"]["items"][0]["qty"] = "2"
+    normalized = _normalize_model_arguments(arguments)
+    assert normalized["payload"]["items"][0]["qty"] == 2
+    result = validate_action_arguments(CREATE_DRAFT_TOOL, normalized)
+    assert result["payload"]["items"][0]["qty"] == 2
+
+
+def test_normalize_quantity_alias_and_delivery_warehouse() -> None:
+    arguments = material_request_arguments()
+    item = arguments["payload"]["items"][0]
+    item["quantity"] = item.pop("qty")
+    item["delivery_warehouse"] = item.pop("warehouse")
+    normalized = _normalize_model_arguments(arguments)
+    row = normalized["payload"]["items"][0]
+    assert row["qty"] == 2
+    assert row["warehouse"] == "Stores - EX"
+    assert "quantity" not in row
+    assert "delivery_warehouse" not in row
+    validate_action_arguments(CREATE_DRAFT_TOOL, normalized)
+
+
+def test_normalize_model_arguments_is_noop_for_canonical_shape() -> None:
+    arguments = material_request_arguments()
+    assert _normalize_model_arguments(arguments) == arguments
+
+
+def test_normalize_rejects_non_numeric_qty_string() -> None:
+    arguments = material_request_arguments()
+    arguments["payload"]["items"][0]["qty"] = "several"
+    normalized = _normalize_model_arguments(arguments)
+    with pytest.raises(ActionProposalError, match="positive number"):
+        validate_action_arguments(CREATE_DRAFT_TOOL, normalized)
+
+
+def test_coerce_number_parses_finite_numbers_only() -> None:
+    assert _coerce_number("5") == 5
+    assert _coerce_number(" 3 ") == 3
+    assert _coerce_number("2.5") == 2.5
+    assert _coerce_number("abc") is None
+    assert _coerce_number("") is None
+    assert _coerce_number("nan") is None
+    assert _coerce_number("inf") is None
+
+
+def test_proposal_tool_input_schema_is_agentscope_compatible() -> None:
+    from agentscope.tool import RegisteredTool
+
+    tool = ActionProposalTool(
+        service=ActionProposalService(
+            ActionGateway(cast(Any, FakeRepository()), ttl_seconds=900),
+            ProposalCaller(),
+        ),
+        session=cast(AsyncSession, FakeSession()),
+        session_id="session-1",
+        site="dev.localhost",
+        requested_by="user@example.com",
+        access_token=TEST_ACCESS_TOKEN,
+        conversation_id="conversation-1",
+    )
+    # RegisteredTool validates input_schema in __post_init__ and rejects shapes that
+    # are not a top-level object with a properties mapping.
+    registered = RegisteredTool(tool=tool)
+    schema = registered.get_tool_schema()
+    function = schema["function"]
+    assert function["name"] == PROPOSE_DRAFT_TOOL
+    parameters = function["parameters"]
+    assert set(parameters["properties"]) == {"tool_name", "arguments"}
+    arguments_schema = parameters["properties"]["arguments"]
+    assert "doctype" in arguments_schema["description"]
+    assert "payload" in arguments_schema["description"]
+    assert "idempotency_key" in arguments_schema["description"]
+
+
+def _in_memory_telemetry() -> tuple[Any, InMemorySpanExporter]:
+    exporter = InMemorySpanExporter()
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql+asyncpg://agent:password@postgres/agent",
+        redis_url=SecretStr("redis://:password@redis/0"),  # noqa: S106
+        erpnext_base_url="http://dev.localhost:8000",
+        erpnext_site="dev.localhost",
+        oauth_client_id="client-id",
+        oauth_client_secret=SecretStr("client-secret"),  # noqa: S106
+        oauth_redirect_uri="http://localhost:8001/api/v1/auth/callback",
+        session_secret=SecretStr("a-session-secret-with-at-least-32-characters"),  # noqa: S106
+        token_encryption_key=SecretStr(  # noqa: S106
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        ),
+        otel_enabled=True,
+        otel_exporter_otlp_endpoint="http://collector:4318/v1/traces",
+    )  # type: ignore[arg-type]
+    telemetry = create_telemetry(
+        settings,
+        span_exporter=exporter,
+        use_batch_processor=False,
+    )
+    return telemetry, exporter
+
+
+def _proposal_tool_with_telemetry(telemetry: Any) -> ActionProposalTool:
+    return ActionProposalTool(
+        service=ActionProposalService(
+            ActionGateway(cast(Any, FakeRepository()), ttl_seconds=900),
+            ProposalCaller(),
+        ),
+        session=cast(AsyncSession, FakeSession()),
+        session_id="session-1",
+        site="dev.localhost",
+        requested_by="user@example.com",
+        access_token=TEST_ACCESS_TOKEN,
+        conversation_id="conversation-1",
+        telemetry=telemetry,
+    )
+
+
+@pytest.mark.asyncio
+async def test_proposal_tool_telemetry_span_on_success() -> None:
+    telemetry, exporter = _in_memory_telemetry()
+    tool = _proposal_tool_with_telemetry(telemetry)
+    chunk = await tool.call(
+        tool_name=CREATE_DRAFT_TOOL,
+        arguments=material_request_arguments(),
+    )
+    assert chunk.state == ToolResultState.SUCCESS
+    spans = [span for span in exporter.get_finished_spans() if span.name == "action.propose"]
+    assert len(spans) == 1
+    attributes = dict(spans[0].attributes)
+    assert attributes["doctype"] == "Material Request"
+    assert attributes["tool_name"] == CREATE_DRAFT_TOOL
+    assert attributes["result_code"] == "OK"
+    assert "error_code" not in attributes
+
+
+@pytest.mark.asyncio
+async def test_proposal_tool_telemetry_span_on_failure() -> None:
+    telemetry, exporter = _in_memory_telemetry()
+    tool = _proposal_tool_with_telemetry(telemetry)
+    arguments = material_request_arguments()
+    arguments["payload"].pop("company")
+    chunk = await tool.call(tool_name=CREATE_DRAFT_TOOL, arguments=arguments)
+    assert chunk.state == ToolResultState.ERROR
+    spans = [span for span in exporter.get_finished_spans() if span.name == "action.propose"]
+    assert len(spans) == 1
+    attributes = dict(spans[0].attributes)
+    assert attributes["error_code"] == "MISSING_REQUIRED_FIELDS"
+    assert attributes["stage"] == "local_validation"
+    assert attributes["doctype"] == "Material Request"
+    assert attributes["result_code"] == "MISSING_REQUIRED_FIELDS"
+    # Privacy guard: no payload or user data in span attributes.
+    assert "company" not in str(attributes)
+    assert "user@example.com" not in str(attributes)
 
 
 @pytest.mark.parametrize(

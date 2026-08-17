@@ -132,6 +132,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.agent_runtime_factory = AgentRuntimeFactory(
             agent_factory=app.state.agent_factory,
             adapter=app.state.mcp_adapter,
+            loop_guard_max_repeats=resolved.mcp_loop_guard_max_repeats,
         )
         app.state.action_recovery_worker = ActionRecoveryWorker(
             enabled=resolved.action_recovery_enabled,

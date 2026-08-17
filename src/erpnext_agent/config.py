@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     mcp_http_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     mcp_execution_timeout_seconds: float = Field(default=25.0, gt=0, le=180)
     mcp_verify_tool_contract: bool = True
+    mcp_loop_guard_max_repeats: int = Field(default=3, ge=2, le=8)
 
     oauth_client_id: str
     oauth_client_secret: SecretStr
