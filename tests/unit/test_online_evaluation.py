@@ -231,12 +231,12 @@ def test_online_suite_file_shape():
     )
     suite = load_suite(path)
     assert suite.execution_mode == "online_authenticated"
-    assert len(suite.cases) == 20
+    assert len(suite.cases) == 22
     distribution = {}
     for case in suite.cases:
         distribution[case.category] = distribution.get(case.category, 0) + 1
     assert distribution == {
-        "simple_query": 6,
+        "simple_query": 8,
         "domain_summary": 4,
         "multi_step": 4,
         "draft_action": 4,
@@ -310,6 +310,17 @@ async def test_parse_chat_stream_extracts_fields():
     assert reply.finished_reason == "stop"
     assert reply.error is None
     assert reply.action is None
+
+
+async def test_parse_chat_stream_extracts_route():
+    lines = _sse_lines(
+        [
+            ("route", {"route": "data_agent"}),
+            ("text_delta", {"delta": "好的"}),
+        ]
+    )
+    reply = await parse_chat_stream(_agen(lines))
+    assert reply.route == "data_agent"
 
 
 async def test_parse_chat_stream_action_and_error():

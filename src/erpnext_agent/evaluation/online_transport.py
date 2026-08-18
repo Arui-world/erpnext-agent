@@ -23,6 +23,7 @@ class LiveStreamReply:
     """Normalized result of one streamed chat turn."""
 
     conversation_id: str | None = None
+    route: str | None = None
     text: str = ""
     tool_calls: tuple[str, ...] = ()
     action: dict[str, Any] | None = None
@@ -84,6 +85,10 @@ async def parse_chat_stream(lines: AsyncIterator[str]) -> LiveStreamReply:
             value = payload.get("conversation_id")
             if isinstance(value, str) and value:
                 conversation_id = value
+        elif event_name == "route":
+            value = payload.get("route")
+            if isinstance(value, str) and value:
+                route = value
         elif event_name == "tool_call_start":
             value = payload.get("tool_name")
             if isinstance(value, str) and value:
@@ -102,6 +107,7 @@ async def parse_chat_stream(lines: AsyncIterator[str]) -> LiveStreamReply:
 
     return LiveStreamReply(
         conversation_id=conversation_id,
+        route=route,
         text="".join(text_chunks).strip(),
         tool_calls=tuple(tool_calls),
         action=action,

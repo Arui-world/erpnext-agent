@@ -26,6 +26,38 @@
       }
     },
     {
+      "case_id": "online_natural_sales_overview",
+      "category": "simple_query",
+      "description": "A conversational sales question is routed to the data agent without fixed keywords.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "帮我看看这个月销售情况", "expected_route": "data_agent"}
+        ]
+      },
+      "expected": {
+        "text_must_not_contain": ["当前 MVP 不支持提交、作废、删除或过账操作"]
+      }
+    },
+    {
+      "case_id": "online_natural_draft_intent",
+      "category": "simple_query",
+      "description": "A conversational draft request is routed to the action agent without fixed keywords.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "我想准备一张销售订单草稿，先告诉我需要哪些信息", "expected_route": "action_agent"}
+        ]
+      },
+      "expected": {
+        "text_must_not_contain": ["当前 MVP 不支持提交、作废、删除或过账操作"]
+      }
+    },
+    {
       "case_id": "online_stock_multi_warehouse",
       "category": "simple_query",
       "description": "All-warehouse stock aggregation routes to the multi-warehouse tool and never sums stock value across warehouses.",

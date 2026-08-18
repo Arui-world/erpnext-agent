@@ -31,7 +31,8 @@ from erpnext_agent.actions.proposal import (
 )
 from erpnext_agent.actions.repository import ActionRepository
 from erpnext_agent.agents.factory import ConfiguredAgentFactory
-from erpnext_agent.agents.orchestrator import Intent, IntentGate, RouteDecision
+from erpnext_agent.agents.intent_classifier import IntentClassifier
+from erpnext_agent.agents.orchestrator import Intent, RouteDecision
 from erpnext_agent.agents.replies import assistant_text
 from erpnext_agent.agents.runtime import (
     AgentIdentityError,
@@ -322,10 +323,7 @@ async def chat(
         db,
         repository,
     )
-    decision = IntentGate().route_with_context(
-        payload.message,
-        turn.previous_user_messages,
-    )
+    decision = await _classify_route(request, payload.message, turn.previous_user_messages)
     fixed = _fixed_policy_response(decision, turn.conversation_id)
     if fixed is not None:
         await _persist_assistant(db, repository, turn.conversation_id, fixed.message)
@@ -393,16 +391,14 @@ async def chat_stream(
         db,
         repository,
     )
-    decision = IntentGate().route_with_context(
-        payload.message,
-        turn.previous_user_messages,
-    )
+    decision = await _classify_route(request, payload.message, turn.previous_user_messages)
     fixed = _fixed_policy_response(decision, turn.conversation_id)
     if fixed is not None:
         await _persist_assistant(db, repository, turn.conversation_id, fixed.message)
 
         async def fixed_events() -> AsyncIterator[str]:
             yield _sse("conversation", {"conversation_id": turn.conversation_id})
+            yield _sse("route", {"route": decision.target_agent or decision.intent.value})
             yield _sse("message", fixed.model_dump())
             yield _sse("done", {"status": fixed.status})
 
@@ -422,8 +418,9 @@ async def chat_stream(
     )
     agent = runtime.agent_for(decision.intent)
     telemetry = cast(Telemetry, request.app.state.telemetry)
-    return StreamingResponse(
-        _persistent_reply_events(
+    async def routed_events() -> AsyncIterator[str]:
+        yield _sse("route", {"route": decision.target_agent or decision.intent.value})
+        async for event in _persistent_reply_events(
             agent,
             turn,
             db,
@@ -431,7 +428,11 @@ async def chat_stream(
             action_proposal_tool=runtime.action_proposal_tool,
             telemetry=telemetry,
             parent_context=telemetry.current_context(),
-        ),
+        ):
+            yield event
+
+    return StreamingResponse(
+        routed_events(),
         media_type="text/event-stream",
         headers={"X-Accel-Buffering": "no"},
     )
@@ -539,6 +540,21 @@ async def _persist_assistant(
         content=content,
     )
     await db.commit()
+
+
+async def _classify_route(
+    request: Request,
+    message: str,
+    previous_user_messages: list[str],
+) -> RouteDecision:
+    """Classify natural language while retaining the deterministic safety fallback."""
+
+    agent_factory = cast(ConfiguredAgentFactory, request.app.state.agent_factory)
+    settings = cast(Settings, request.app.state.settings)
+    return await IntentClassifier(
+        agent_factory.model,
+        timeout_seconds=settings.intent_classifier_timeout_seconds,
+    ).classify(message, previous_user_messages)
 
 
 async def _prepare_runtime(

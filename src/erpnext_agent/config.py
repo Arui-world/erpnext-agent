@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     model_api_key: SecretStr | None = None
     model_base_url: str | None = None
     model_max_retries: int = Field(default=1, ge=0, le=3)
+    intent_classifier_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
 
     otel_enabled: bool = False
     otel_service_name: str = "erpnext-agent"

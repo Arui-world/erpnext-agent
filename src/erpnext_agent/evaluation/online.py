@@ -502,6 +502,22 @@ class OnlineEvaluationRunner:
             if reply.conversation_id is not None:
                 conversation_id = reply.conversation_id
             replies.append(reply)
+            if turn.expected_route is not None and reply.route != turn.expected_route:
+                turn_tool_details.append(
+                    {
+                        "expected_route": turn.expected_route,
+                        "actual_route": reply.route,
+                        "matched": False,
+                    }
+                )
+            elif turn.expected_route is not None:
+                turn_tool_details.append(
+                    {
+                        "expected_route": turn.expected_route,
+                        "actual_route": reply.route,
+                        "matched": True,
+                    }
+                )
             if turn.expected_tools:
                 _, details = assert_tool_sequence(reply.tool_calls, turn.expected_tools)
                 turn_tool_details.append(details)
@@ -528,6 +544,12 @@ class OnlineEvaluationRunner:
         if len(case.input.turns) > 1:
             continuity_ok = conversation_id is not None
 
+        route_ok = all(
+            detail.get("matched", True)
+            for detail in turn_tool_details
+            if "expected_route" in detail
+        )
+
         passed = (
             tool_ok
             and forbidden_ok
@@ -535,6 +557,7 @@ class OnlineEvaluationRunner:
             and facts_ok
             and error_ok
             and continuity_ok
+            and route_ok
         )
         if expected.allow_permission_denied and not passed:
             passed = not error_events and looks_permission_denied(full_text)
@@ -544,6 +567,7 @@ class OnlineEvaluationRunner:
             "conversation_id": conversation_id,
             "turns": len(case.input.turns),
             "tool_calls": all_tools,
+            "routes": [reply.route for reply in replies],
             "tool_sequence": tool_details,
             "forbidden_tools": forbidden_details,
             "text": text_details,
