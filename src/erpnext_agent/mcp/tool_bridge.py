@@ -4,6 +4,7 @@ import json
 from copy import deepcopy
 from typing import Any, Protocol
 
+import jsonschema  # type: ignore[import-untyped]
 from agentscope.message import TextBlock, ToolResultState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.tool import ToolBase, ToolChunk
@@ -12,6 +13,7 @@ from erpnext_agent.mcp.adapter import MCPEnvelope, MCPError
 from erpnext_agent.mcp.policy import EXPECTED_TOOLS, READ_TOOLS
 
 SAFE_META_FIELDS = frozenset({"trace_id", "tool", "user", "duration_ms", "replayed"})
+JSON_COMPATIBLE_FIELDS = frozenset({"fields", "filters"})
 
 
 class MCPToolCaller(Protocol):
@@ -51,9 +53,11 @@ class ERPNextMCPTool(ToolBase):
 
         self.name = name
         self.description = description if isinstance(description, str) else ""
-        # Preserve the server schema exactly. In particular, do not drop $defs,
-        # anyOf/oneOf or silently add defaults that change the contract hash.
-        self.input_schema = deepcopy(input_schema)
+        # Keep the canonical server contract for post-normalization validation. The
+        # model-facing copy additionally accepts JSON-encoded nested arguments because
+        # some OpenAI-compatible providers stringify arrays/objects in tool calls.
+        self._server_input_schema = deepcopy(input_schema)
+        self.input_schema = _model_compatible_schema(input_schema)
         self.is_read_only = name in READ_TOOLS
         self.is_concurrency_safe = self.is_read_only
         self._adapter = adapter
@@ -77,11 +81,21 @@ class ERPNextMCPTool(ToolBase):
         )
 
     async def call(self, **kwargs: Any) -> ToolChunk:
+        normalized, error = _normalize_json_arguments(
+            kwargs,
+            self._server_input_schema,
+        )
+        if error is not None:
+            return ToolChunk(
+                content=[TextBlock(text=_json_text(error))],
+                state=ToolResultState.ERROR,
+                metadata={"code": "INVALID_TOOL_ARGUMENT"},
+            )
         try:
             envelope = await self._adapter.call_tool(
                 access_token=self._access_token,
                 name=self.name,
-                arguments=kwargs,
+                arguments=normalized,
             )
         except MCPError as exc:
             error = {
@@ -130,3 +144,61 @@ def validate_tool_spec(spec: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 def _json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _model_compatible_schema(server_schema: dict[str, Any]) -> dict[str, Any]:
+    schema = deepcopy(server_schema)
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return schema
+    for field in JSON_COMPATIBLE_FIELDS:
+        field_schema = properties.get(field)
+        if not isinstance(field_schema, dict):
+            continue
+        properties[field] = {
+            "anyOf": [
+                field_schema,
+                {
+                    "type": "string",
+                    "description": (
+                        "Compatibility form: a JSON-encoded array/object; the bridge "
+                        "parses and validates it before the MCP request."
+                    ),
+                },
+            ],
+        }
+    return schema
+
+
+def _normalize_json_arguments(
+    arguments: dict[str, Any],
+    server_schema: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    normalized = dict(arguments)
+    for field in JSON_COMPATIBLE_FIELDS:
+        value = normalized.get(field)
+        if not isinstance(value, str):
+            continue
+        try:
+            normalized[field] = json.loads(value)
+        except json.JSONDecodeError:
+            return normalized, _invalid_argument_error(
+                field,
+                "must be valid JSON when supplied as a string",
+            )
+    try:
+        jsonschema.validate(normalized, server_schema)
+    except jsonschema.ValidationError as exc:
+        field = str(exc.path[0]) if exc.path else "arguments"
+        return normalized, _invalid_argument_error(field, exc.message)
+    return normalized, None
+
+
+def _invalid_argument_error(field: str, message: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": {
+            "code": "INVALID_TOOL_ARGUMENT",
+            "message": f"Invalid {field}: {message}",
+        },
+    }

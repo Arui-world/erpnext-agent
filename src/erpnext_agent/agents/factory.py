@@ -7,6 +7,7 @@ from agentscope.agent import Agent, ModelConfig, ReActConfig
 from agentscope.model import ChatModelBase
 from agentscope.tool import Toolkit
 
+from erpnext_agent.agents.convergence import TerminalToolConvergenceMiddleware
 from erpnext_agent.agents.model_factory import build_chat_model
 from erpnext_agent.agents.prompts import (
     ACTION_SYSTEM_PROMPT,
@@ -100,19 +101,35 @@ def build_agent_bundle(
     neither tokens nor MCP clients belong in serializable agent state.
     """
 
-    def make(name: str, prompt: str, toolkit: Toolkit) -> Agent:
+    def make(
+        name: str,
+        prompt: str,
+        toolkit: Toolkit,
+        *,
+        terminal_tools: frozenset[str] = frozenset(),
+    ) -> Agent:
         return Agent(
             name=name,
             system_prompt=prompt,
             model=model,
             toolkit=toolkit,
+            middlewares=(
+                [TerminalToolConvergenceMiddleware(terminal_tools)]
+                if terminal_tools
+                else None
+            ),
             model_config=ModelConfig(max_retries=max_retries),
             react_config=ReActConfig(max_iters=8, stop_on_reject=True),
         )
 
     return AgentBundle(
         orchestrator=make("orchestrator", ORCHESTRATOR_SYSTEM_PROMPT, orchestrator_toolkit),
-        data_agent=make("data_agent", DATA_SYSTEM_PROMPT, data_toolkit),
+        data_agent=make(
+            "data_agent",
+            DATA_SYSTEM_PROMPT,
+            data_toolkit,
+            terminal_tools=frozenset({"erpnext_get_count", "erpnext_get_list"}),
+        ),
         action_agent=make("action_agent", ACTION_SYSTEM_PROMPT, action_toolkit),
         patrol_agent=make("patrol_agent", PATROL_SYSTEM_PROMPT, patrol_toolkit),
     )

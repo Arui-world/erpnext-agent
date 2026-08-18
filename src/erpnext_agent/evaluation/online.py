@@ -79,6 +79,7 @@ ONLINE_DISCLAIMER = (
 )
 
 WRITE_TOOLS: tuple[str, ...] = ("erpnext_create_draft", "erpnext_update_draft")
+NORMAL_FINISHED_REASONS = frozenset({"completed", "stop", "done"})
 
 FIXTURE_ENV: dict[str, str] = {
     "company": "EVAL_ONLINE_COMPANY",
@@ -539,6 +540,11 @@ class OnlineEvaluationRunner:
         )
         facts_ok, fact_details = self._check_env_facts(full_text, expected.optional_env_facts)
         error_ok = (len(error_events) > 0) if expected.expect_error else not error_events
+        completion_ok = (
+            not expected.require_normal_completion
+            or expected.expect_error
+            or all(reply.finished_reason in NORMAL_FINISHED_REASONS for reply in replies)
+        )
 
         continuity_ok = True
         if len(case.input.turns) > 1:
@@ -558,9 +564,10 @@ class OnlineEvaluationRunner:
             and error_ok
             and continuity_ok
             and route_ok
+            and completion_ok
         )
         if expected.allow_permission_denied and not passed:
-            passed = not error_events and looks_permission_denied(full_text)
+            passed = completion_ok and not error_events and looks_permission_denied(full_text)
 
         evidence: dict[str, Any] = {
             "identity": case.input.identity,
@@ -574,6 +581,7 @@ class OnlineEvaluationRunner:
             "env_facts": fact_details,
             "error_events": error_events,
             "finished_reasons": [reply.finished_reason for reply in replies],
+            "normal_completion": completion_ok,
             "reply_excerpt": full_text[:500],
         }
         if turn_tool_details:
@@ -621,6 +629,13 @@ class OnlineEvaluationRunner:
         }
         if reply.error is not None:
             evidence["error_events"] = [reply.error]
+            return False, evidence
+        if (
+            expected.require_normal_completion
+            and reply.finished_reason not in NORMAL_FINISHED_REASONS
+        ):
+            evidence["reason"] = "agent reply did not finish normally"
+            evidence["reply_excerpt"] = reply.text[:500]
             return False, evidence
         if reply.action is None:
             evidence["reason"] = "no action_required event emitted"

@@ -92,7 +92,7 @@ class IntentClassifier:
     def _messages(message: str, previous_user_messages: list[str]) -> list[Msg]:
         context = ""
         if previous_user_messages:
-            recent = [item[-1200:] for item in previous_user_messages[-6:]]
+            recent = [item[:1200] for item in previous_user_messages[-6:]]
             context = "\n此前用户消息（仅作上下文）：\n" + "\n".join(
                 f"- {item}" for item in recent
             )

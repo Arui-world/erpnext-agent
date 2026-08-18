@@ -142,7 +142,9 @@ GET http://localhost:8001/api/v1/auth/login
 | 会话 | `SESSION_SECRET`, `SESSION_COOKIE_*`, `SESSION_TTL_SECONDS` | Agent 浏览器会话 |
 | 加密 | `TOKEN_ENCRYPTION_KEY`, `TOKEN_ENCRYPTION_KEY_VERSION` | OAuth token 信封加密入口 |
 | Action | `ACTION_TTL_SECONDS`, `ACTION_RECOVERY_*`, `ACTION_EXECUTION_LOCK_TTL_SECONDS`, `ACTION_HISTORY_LIMIT` | 审批期限、后台恢复、执行互斥与会话卡片恢复数量 |
-| 模型 | `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_API_KEY`, `MODEL_BASE_URL`, `INTENT_CLASSIFIER_TIMEOUT_SECONDS` | AgentScope Model Factory 与自然语言意图路由超时 |
+| 模型 | `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_API_KEY`, `MODEL_BASE_URL`, `MODEL_ENABLE_THINKING`, `INTENT_CLASSIFIER_TIMEOUT_SECONDS`, `AGENT_TURN_TIMEOUT_SECONDS` | AgentScope Model Factory、千问思考模式和意图/单轮超时 |
+| 请求保护 | `REQUEST_BODY_MAX_BYTES`, `RATE_LIMIT_*` | 请求体大小、聊天/审批/认证接口固定窗口限流 |
+| MCP/循环 | `MCP_LOOP_GUARD_MAX_REPEATS` | 相同只读工具调用的请求级循环保护 |
 | 记忆 | `CHAT_HISTORY_*`, `CHAT_SUMMARY_*`, `CHAT_RETENTION_*` | 模型上下文、页面历史、自动摘要与保留清理策略 |
 | 观测 | `OTEL_ENABLED`, `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORT_TIMEOUT_SECONDS` | 可选 OTLP/HTTP Trace 导出 |
 
@@ -222,12 +224,17 @@ MODEL_PROVIDER=openai_compatible
 MODEL_NAME=replace-with-model-name
 MODEL_API_KEY=replace-with-real-key
 MODEL_BASE_URL=https://model-service.example/v1
+MODEL_ENABLE_THINKING=false
 ```
 
 `MODEL_PROVIDER=openai` 使用 AgentScope 官方 `OpenAIChatModel` 默认地址；
 `openai_compatible` 必须明确配置 `MODEL_BASE_URL`。服务的 `/health/ready` 会返回不包含密钥的
 `model_configured` 状态。模型内部重试关闭，统一由 `MODEL_MAX_RETRIES` 配置 Agent 层重试，
 避免两层重试叠加。
+
+使用 Qwen 3.x 等混合思考模型时，`MODEL_ENABLE_THINKING=false` 可避免思考模式与工具强制选择
+不兼容；MCP 工具桥仍会对模型偶发编码成字符串的 `fields/filters` 参数进行严格 JSON 解码和
+原始 Schema 校验。
 
 ### 本地启用 OpenTelemetry
 

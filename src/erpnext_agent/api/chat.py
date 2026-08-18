@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -339,6 +340,7 @@ async def chat(
     )
     agent = runtime.agent_for(decision.intent)
     telemetry = cast(Telemetry, request.app.state.telemetry)
+    settings = cast(Settings, request.app.state.settings)
     with telemetry.span(
         "agent.model.reply",
         attributes={
@@ -348,7 +350,11 @@ async def chat(
         },
     ) as span:
         try:
-            reply = await agent.reply(turn.messages)
+            async with asyncio.timeout(settings.agent_turn_timeout_seconds):
+                reply = await agent.reply(turn.messages)
+        except TimeoutError as exc:
+            set_span_result(span, "AGENT_TURN_TIMEOUT", error=True)
+            raise HTTPException(status_code=504, detail="Agent turn timed out") from exc
         except Exception as exc:
             set_span_result(span, "MODEL_REPLY_FAILED", error=True)
             raise HTTPException(status_code=502, detail="Model reply failed") from exc
@@ -418,6 +424,8 @@ async def chat_stream(
     )
     agent = runtime.agent_for(decision.intent)
     telemetry = cast(Telemetry, request.app.state.telemetry)
+    settings = cast(Settings, request.app.state.settings)
+
     async def routed_events() -> AsyncIterator[str]:
         yield _sse("route", {"route": decision.target_agent or decision.intent.value})
         async for event in _persistent_reply_events(
@@ -428,6 +436,7 @@ async def chat_stream(
             action_proposal_tool=runtime.action_proposal_tool,
             telemetry=telemetry,
             parent_context=telemetry.current_context(),
+            timeout_seconds=settings.agent_turn_timeout_seconds,
         ):
             yield event
 
@@ -460,6 +469,7 @@ async def model_chat_stream(
     agent_factory = cast(ConfiguredAgentFactory, request.app.state.agent_factory)
     agent = agent_factory.build_model_chat_agent()
     telemetry = cast(Telemetry, request.app.state.telemetry)
+    settings = cast(Settings, request.app.state.settings)
     return StreamingResponse(
         _persistent_reply_events(
             agent,
@@ -468,6 +478,7 @@ async def model_chat_stream(
             repository,
             telemetry=telemetry,
             parent_context=telemetry.current_context(),
+            timeout_seconds=settings.agent_turn_timeout_seconds,
         ),
         media_type="text/event-stream",
         headers={"X-Accel-Buffering": "no"},
@@ -712,6 +723,7 @@ async def _persistent_reply_events(
     action_proposal_tool: ActionProposalTool | None = None,
     telemetry: Telemetry | None = None,
     parent_context: Any | None = None,
+    timeout_seconds: float | None = None,
 ) -> AsyncIterator[str]:
     yield _sse("conversation", {"conversation_id": turn.conversation_id})
 
@@ -726,6 +738,7 @@ async def _persistent_reply_events(
         telemetry=telemetry,
         parent_context=parent_context,
         turn_id=turn.turn_id,
+        timeout_seconds=timeout_seconds,
     ):
         yield event
 
@@ -739,6 +752,7 @@ async def _reply_events(
     telemetry: Telemetry | None = None,
     parent_context: Any | None = None,
     turn_id: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> AsyncIterator[str]:
     messages: Msg | list[Msg]
     if isinstance(inputs, str):
@@ -759,7 +773,7 @@ async def _reply_events(
         parent_context=parent_context,
     ) as span:
         try:
-            async for event in agent.reply_stream(messages):
+            async for event in _bounded_reply_stream(agent, messages, timeout_seconds):
                 if isinstance(event, TextBlockDeltaEvent):
                     delta = str(event.delta)
                     text_chunks.append(delta)
@@ -809,12 +823,32 @@ async def _reply_events(
                     )
                     set_span_result(span, "OK")
                     yield _sse("done", {"finished_reason": reason})
+        except TimeoutError:
+            set_span_result(span, "AGENT_TURN_TIMEOUT", error=True)
+            yield _sse(
+                "error",
+                {"code": "AGENT_TURN_TIMEOUT", "message": "Agent turn timed out"},
+            )
         except Exception:
             set_span_result(span, "AGENT_REPLY_FAILED", error=True)
             yield _sse(
                 "error",
                 {"code": "AGENT_REPLY_FAILED", "message": "Agent reply failed"},
             )
+
+
+async def _bounded_reply_stream(
+    agent: Agent,
+    messages: Msg | list[Msg],
+    timeout_seconds: float | None,
+) -> AsyncIterator[Any]:
+    if timeout_seconds is None:
+        async for event in agent.reply_stream(messages):
+            yield event
+        return
+    async with asyncio.timeout(timeout_seconds):
+        async for event in agent.reply_stream(messages):
+            yield event
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:

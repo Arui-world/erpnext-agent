@@ -738,6 +738,46 @@ async def test_live_chat_evidence_includes_finished_reasons():
     suite = _suite([_chat_case(text_must_contain=["widget"])])
     report = await runner.run(suite)
     assert report.cases[0].evidence["finished_reasons"] == ["stop"]
+    assert report.cases[0].evidence["normal_completion"] is True
+
+
+async def test_live_chat_exceed_max_iters_fails_normal_completion_gate():
+    transport = FakeTransport()
+    transport.stream_scripts.append(
+        _sse_lines(
+            [
+                ("conversation", {"conversation_id": "conv-1"}),
+                ("text_delta", {"delta": "fallback"}),
+                ("done", {"finished_reason": "exceed_max_iters"}),
+            ]
+        )
+    )
+    runner = _make_runner(
+        transport, BASE_ENV, credential_ids={"primary@example.com": "cred-1"}
+    )
+    report = await runner.run(_suite([_chat_case()]))
+    assert report.cases[0].passed is False
+    assert report.cases[0].evidence["normal_completion"] is False
+
+
+async def test_live_chat_can_explicitly_disable_normal_completion_gate():
+    transport = FakeTransport()
+    transport.stream_scripts.append(
+        _sse_lines(
+            [
+                ("conversation", {"conversation_id": "conv-1"}),
+                ("text_delta", {"delta": "fallback"}),
+                ("done", {"finished_reason": "exceed_max_iters"}),
+            ]
+        )
+    )
+    runner = _make_runner(
+        transport, BASE_ENV, credential_ids={"primary@example.com": "cred-1"}
+    )
+    report = await runner.run(
+        _suite([_chat_case(require_normal_completion=False)])
+    )
+    assert report.cases[0].passed is True
 
 
 async def test_draft_evidence_includes_finished_reason():
@@ -750,3 +790,26 @@ async def test_draft_evidence_includes_finished_reason():
     suite = _suite([_draft_case("reject")])
     report = await runner.run(suite)
     assert report.cases[0].evidence["finished_reason"] == "stop"
+
+
+async def test_draft_exceed_max_iters_fails_before_decision():
+    transport = FakeTransport()
+    transport.stream_scripts.append(
+        _sse_lines(
+            [
+                ("conversation", {"conversation_id": "conv-1"}),
+                (
+                    "action_required",
+                    {"action_id": "act-1", "preview": {"doctype": "Sales Order"}},
+                ),
+                ("done", {"finished_reason": "exceed_max_iters"}),
+            ]
+        )
+    )
+    runner = _make_runner(
+        transport, BASE_ENV, credential_ids={"primary@example.com": "cred-1"}
+    )
+    report = await runner.run(_suite([_draft_case("reject")]))
+    assert report.cases[0].passed is False
+    assert report.cases[0].evidence["reason"] == "agent reply did not finish normally"
+    assert transport.post_calls == []

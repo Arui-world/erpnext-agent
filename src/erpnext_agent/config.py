@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     trusted_hosts: str = "localhost,127.0.0.1,agent"
     cors_origins: str = "http://localhost:3000,http://localhost:8001"
+    request_body_max_bytes: int = Field(default=65_536, ge=16_384, le=10_485_760)
+    rate_limit_enabled: bool = True
+    rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
+    rate_limit_chat_requests: int = Field(default=30, ge=1, le=10_000)
+    rate_limit_action_requests: int = Field(default=30, ge=1, le=10_000)
+    rate_limit_auth_requests: int = Field(default=60, ge=1, le=10_000)
 
     database_url: str
     redis_url: SecretStr
@@ -44,7 +50,7 @@ class Settings(BaseSettings):
     mcp_http_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     mcp_execution_timeout_seconds: float = Field(default=25.0, gt=0, le=180)
     mcp_verify_tool_contract: bool = True
-    mcp_loop_guard_max_repeats: int = Field(default=3, ge=2, le=8)
+    mcp_loop_guard_max_repeats: int = Field(default=2, ge=2, le=8)
 
     oauth_client_id: str
     oauth_client_secret: SecretStr
@@ -102,8 +108,10 @@ class Settings(BaseSettings):
     model_name: str = ""
     model_api_key: SecretStr | None = None
     model_base_url: str | None = None
+    model_enable_thinking: bool | None = None
     model_max_retries: int = Field(default=1, ge=0, le=3)
     intent_classifier_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
+    agent_turn_timeout_seconds: float = Field(default=90.0, gt=0, le=300)
 
     otel_enabled: bool = False
     otel_service_name: str = "erpnext-agent"

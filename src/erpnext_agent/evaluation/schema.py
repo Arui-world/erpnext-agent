@@ -144,6 +144,7 @@ class LiveChatExpected(StrictModel):
     optional_env_facts: list[str] = Field(default_factory=list, max_length=10)
     allow_permission_denied: bool = False
     expect_error: bool = False
+    require_normal_completion: bool = True
 
 
 class LiveChatCase(CaseBase):
@@ -163,6 +164,7 @@ class LiveDraftActionExpected(StrictModel):
     cross_user_identity: OnlineIdentity | None = None
     expect_execute_success: bool = False
     expect_cleanup: bool = False
+    require_normal_completion: bool = True
 
     @model_validator(mode="after")
     def validate_flow(self) -> LiveDraftActionExpected:

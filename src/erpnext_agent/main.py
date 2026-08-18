@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 from starlette.middleware.base import RequestResponseEndpoint
@@ -48,6 +48,7 @@ from erpnext_agent.observability import (
     normalized_request_id,
     set_span_result,
 )
+from erpnext_agent.security.limits import RedisRateLimiter, RequestBodyLimitMiddleware
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -77,6 +78,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.database_revision = database_revision
         app.state.db_session_factory = session_factory
         app.state.redis = redis
+        app.state.rate_limiter = RedisRateLimiter(
+            redis,
+            resolved.session_secret.get_secret_value(),
+        )
         app.state.http = http
         app.state.session_store = SessionStore(
             redis,
@@ -187,6 +192,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resolved.session_secret.get_secret_value()
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=resolved.trusted_host_list)
+    app.add_middleware(RequestBodyLimitMiddleware, max_bytes=resolved.request_body_max_bytes)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=resolved.cors_origin_list,
@@ -194,6 +200,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type", "X-CSRF-Token", "X-Request-ID"],
     )
+
+    @app.middleware("http")
+    async def enforce_rate_limit(
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        policy = _rate_limit_policy(request, resolved)
+        if not resolved.rate_limit_enabled or policy is None:
+            return await call_next(request)
+        bucket, limit = policy
+        identifier = request.cookies.get(resolved.session_cookie_name)
+        if not identifier:
+            identifier = request.client.host if request.client is not None else "unknown"
+        limiter = getattr(request.app.state, "rate_limiter", None)
+        if limiter is None:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": {
+                        "code": "RATE_LIMIT_UNAVAILABLE",
+                        "message": "Request admission control is unavailable",
+                    }
+                },
+            )
+        try:
+            decision = await limiter.check(
+                bucket=bucket,
+                identity=identifier,
+                limit=limit,
+                window_seconds=resolved.rate_limit_window_seconds,
+            )
+        except Exception:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": {
+                        "code": "RATE_LIMIT_UNAVAILABLE",
+                        "message": "Request admission control is unavailable",
+                    }
+                },
+            )
+        if not decision.allowed:
+            return JSONResponse(
+                status_code=429,
+                headers={"Retry-After": str(decision.retry_after_seconds)},
+                content={
+                    "detail": {
+                        "code": "RATE_LIMITED",
+                        "message": "Too many requests; retry later",
+                    }
+                },
+            )
+        response = await call_next(request)
+        response.headers["X-RateLimit-Remaining"] = str(decision.remaining)
+        return response
 
     @app.middleware("http")
     async def request_context(
@@ -249,6 +310,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return FileResponse(web_root / "index.html")
 
     return app
+
+
+def _rate_limit_policy(request: Request, settings: Settings) -> tuple[str, int] | None:
+    path = request.url.path
+    prefix = settings.api_prefix
+    if request.method == "POST" and path.startswith(f"{prefix}/chat"):
+        return "chat", settings.rate_limit_chat_requests
+    if request.method == "POST" and path.startswith(f"{prefix}/approvals/"):
+        return "action", settings.rate_limit_action_requests
+    if path in {
+        f"{prefix}/auth/login",
+        f"{prefix}/auth/callback",
+        f"{prefix}/auth/logout",
+    }:
+        return "auth", settings.rate_limit_auth_requests
+    return None
 
 
 app = create_app()

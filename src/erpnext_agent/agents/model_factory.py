@@ -62,11 +62,18 @@ def build_chat_model(settings: Settings) -> ChatModelBase:
             api_key=api_key,
             base_url=base_url,
         )
+        extra_body = None
+        if (
+            settings.model_provider == "openai_compatible"
+            and settings.model_enable_thinking is not None
+        ):
+            extra_body = {"enable_thinking": settings.model_enable_thinking}
         return OpenAIChatModel(
             credential=openai_credential,
             model=model_name,
             stream=True,
             max_retries=0,
+            extra_body=extra_body,
         )
 
     # Settings validates this already; this branch protects direct/future callers.

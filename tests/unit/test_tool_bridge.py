@@ -1,6 +1,7 @@
 import json
 from typing import Any
 
+import jsonschema
 import pytest
 from agentscope.message import TextBlock, ToolResultState
 from agentscope.permission import (
@@ -116,6 +117,62 @@ async def test_tool_preserves_schema_and_structured_content() -> None:
         "meta": {"trace_id": "trace-1"},
     }
     assert "secret" not in chunk.metadata
+
+
+@pytest.mark.asyncio
+async def test_tool_normalizes_json_encoded_nested_arguments() -> None:
+    spec = tool_spec("erpnext_get_list")
+    spec["inputSchema"]["properties"].update(
+        {
+            "fields": {"type": ["array", "null"], "items": {"type": "string"}},
+            "filters": {
+                "anyOf": [
+                    {"type": "object", "additionalProperties": {}},
+                    {"type": "array", "items": {}},
+                    {"type": "null"},
+                ]
+            },
+        }
+    )
+    adapter = FakeAdapter()
+    tool = ERPNextMCPTool(spec=spec, adapter=adapter, access_token=TEST_ACCESS_TOKEN)
+
+    # AgentScope validates against the widened model-facing schema first.
+    jsonschema.validate(
+        {"query": "Sales Order", "fields": '["name","status"]', "filters": "{}"},
+        tool.input_schema,
+    )
+    chunk = await tool.call(
+        query="Sales Order",
+        fields='["name","status"]',
+        filters="{}",
+    )
+    assert chunk.state == ToolResultState.SUCCESS
+    assert adapter.calls == [
+        (
+            "erpnext_get_list",
+            {
+                "query": "Sales Order",
+                "fields": ["name", "status"],
+                "filters": {},
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_rejects_invalid_json_encoded_nested_arguments() -> None:
+    spec = tool_spec("erpnext_get_list")
+    spec["inputSchema"]["properties"]["fields"] = {
+        "type": ["array", "null"],
+        "items": {"type": "string"},
+    }
+    adapter = FakeAdapter()
+    tool = ERPNextMCPTool(spec=spec, adapter=adapter, access_token=TEST_ACCESS_TOKEN)
+    chunk = await tool.call(query="Sales Order", fields="not-json")
+    assert chunk.state == ToolResultState.ERROR
+    assert adapter.calls == []
+    assert chunk.metadata == {"code": "INVALID_TOOL_ARGUMENT"}
 
 
 @pytest.mark.asyncio

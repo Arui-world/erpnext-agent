@@ -12,7 +12,13 @@ from erpnext_agent.config import Settings
 
 @pytest.fixture(autouse=True)
 def model_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    for name in ("MODEL_PROVIDER", "MODEL_NAME", "MODEL_API_KEY", "MODEL_BASE_URL"):
+    for name in (
+        "MODEL_PROVIDER",
+        "MODEL_NAME",
+        "MODEL_API_KEY",
+        "MODEL_BASE_URL",
+        "MODEL_ENABLE_THINKING",
+    ):
         monkeypatch.delenv(name, raising=False)
     yield
 
@@ -59,6 +65,37 @@ def test_openai_compatible_model_uses_configured_provider(
         MODEL_BASE_URL="https://model.example.test/v1",
     )
     assert isinstance(build_chat_model(settings), OpenAIChatModel)
+
+
+def test_openai_compatible_model_can_disable_provider_thinking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = settings_from_environment(
+        monkeypatch,
+        MODEL_PROVIDER="openai_compatible",
+        MODEL_NAME="qwen3.6-flash",
+        MODEL_API_KEY="test-api-key",
+        MODEL_BASE_URL="https://model.example.test/v1",
+        MODEL_ENABLE_THINKING="false",
+    )
+    model = build_chat_model(settings)
+    assert isinstance(model, OpenAIChatModel)
+    assert model.extra_body == {"enable_thinking": False}
+
+
+def test_openai_model_does_not_receive_compatible_provider_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = settings_from_environment(
+        monkeypatch,
+        MODEL_PROVIDER="openai",
+        MODEL_NAME="openai-model",
+        MODEL_API_KEY="test-api-key",
+        MODEL_ENABLE_THINKING="false",
+    )
+    model = build_chat_model(settings)
+    assert isinstance(model, OpenAIChatModel)
+    assert model.extra_body is None
 
 
 def test_missing_api_key_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

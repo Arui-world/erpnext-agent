@@ -66,6 +66,7 @@ async def parse_chat_stream(lines: AsyncIterator[str]) -> LiveStreamReply:
     """
     event_name = "message"
     conversation_id: str | None = None
+    route: str | None = None
     text_chunks: list[str] = []
     tool_calls: list[str] = []
     action: dict[str, Any] | None = None

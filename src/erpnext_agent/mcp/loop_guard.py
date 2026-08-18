@@ -78,9 +78,9 @@ class LoopGuardTool(ToolBase):
             "error": {
                 "code": REPEATED_TOOL_CALL,
                 "message": (
-                    "This exact tool call has already been made and returned data. "
-                    "Do not repeat it. Answer from the information you already have, "
-                    "or change the arguments if a different query is truly needed."
+                    "同一参数的工具调用已经返回过有效结果，禁止再次调用任何工具。"
+                    "现在必须直接根据已有结果输出简洁中文答案；如果 rows 为空，"
+                    "就明确回答没有记录。Do not call another tool. Answer the user now."
                 ),
             },
         }

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -95,3 +96,26 @@ async def test_action_stream_emits_persistent_summary_before_action_event() -> N
     assert action_payload["action_id"] == record.action_id
     assert events[3] == _sse("done", {"finished_reason": "completed"})
     assert persisted == [("请确认预览。" + action_summary_markdown(record)).strip()]
+
+
+async def test_stream_timeout_returns_stable_error_event() -> None:
+    class SlowReplyAgent:
+        async def reply_stream(self, _message: UserMsg):
+            await asyncio.sleep(0.05)
+            yield ReplyEndEvent(session_id="session-1", reply_id="reply-1")
+
+    events = [
+        event
+        async for event in _reply_events(  # type: ignore[arg-type]
+            SlowReplyAgent(),
+            "查看当前库存",
+            timeout_seconds=0.001,
+        )
+    ]
+
+    assert events == [
+        _sse(
+            "error",
+            {"code": "AGENT_TURN_TIMEOUT", "message": "Agent turn timed out"},
+        )
+    ]
