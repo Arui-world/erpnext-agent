@@ -5,13 +5,15 @@ from typing import Literal
 
 from agentscope.message import Msg, TextBlock, UserMsg
 from agentscope.model import ChatModelBase
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from erpnext_agent.agents.orchestrator import Intent, IntentGate, RouteDecision
 
 
 class IntentClassification(BaseModel):
     """The deliberately small, non-authoritative LLM routing result."""
+
+    model_config = ConfigDict(extra="forbid")
 
     intent: Literal["data", "action", "patrol", "clarify"]
     reason: str = Field(default="", max_length=240)
@@ -55,6 +57,8 @@ class IntentClassifier:
 
         previous = previous_user_messages or []
         deterministic = self._gate.route_with_context(message, previous)
+        if not message.strip():
+            return deterministic
         if deterministic.intent == Intent.DENY:
             return deterministic
 
@@ -71,6 +75,8 @@ class IntentClassifier:
             return deterministic
 
         intent = Intent(parsed.intent)
+        if intent == Intent.CLARIFY and deterministic.intent != Intent.CLARIFY:
+            return deterministic
         target_agent = {
             Intent.DATA: "data_agent",
             Intent.ACTION: "action_agent",
