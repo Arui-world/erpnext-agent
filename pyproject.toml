@@ -9,7 +9,7 @@ description = "A permission-aware AgentScope service for ERPNext"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "agentscope==2.0.5",
+  "agentscope==2.0.6",
   "alembic>=1.16,<2",
   "asyncpg>=0.30,<1",
   "cryptography>=45,<47",
