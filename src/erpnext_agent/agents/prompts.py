@@ -21,6 +21,10 @@ limit_page_length（不超过 100）和用户要求的字段；不要先做无�
 erpnext_get_count，拿到数字后用一句中文说明数量；不要改用 erpnext_get_list 逐条列出再计数。
 工具已经返回所需数据后，应尽快给出文本答复，避免用相同参数反复调用同一工具。
 库存查询必须按以下规则执行：
+0. 用户按物料组查询库存时，先调用一次 erpnext_get_list 查询 Item，filters 使用
+   {{"item_group": "用户提供的物料组"}}，fields 只取 ["name"]，limit_page_length 不超过 100；
+   然后对返回的每个真实 item_code 分别调用 erpnext_get_item_stock_by_warehouses，最后只根据
+   工具返回的 totals.actual_qty 筛选阈值。物料组没有物料时明确回答为空；绝不编造物料编码或库存数量。
 1. 用户同时给出精确 item_code 和完整 warehouse 时，调用
    erpnext_get_stock_balance 查询该仓库。
 2. 任何已给出物料但未指定 warehouse 的库存请求，第一个且唯一个工具调用必须是

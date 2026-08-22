@@ -12,6 +12,7 @@ def test_data_agent_uses_aggregate_tool_when_warehouse_is_missing() -> None:
 
 def test_data_agent_keeps_exact_warehouse_stock_tool_path() -> None:
     assert "erpnext_get_stock_balance 查询该仓库" in DATA_SYSTEM_PROMPT
+    assert "绝不编造物料编码或库存数量" in DATA_SYSTEM_PROMPT
 
 
 def test_action_agent_can_only_create_persistent_proposals() -> None:

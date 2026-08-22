@@ -33,7 +33,7 @@ from erpnext_agent.actions.proposal import (
 from erpnext_agent.actions.repository import ActionRepository
 from erpnext_agent.agents.factory import ConfiguredAgentFactory
 from erpnext_agent.agents.intent_classifier import IntentClassifier
-from erpnext_agent.agents.orchestrator import Intent, RouteDecision
+from erpnext_agent.agents.orchestrator import Intent, IntentGate, RouteDecision
 from erpnext_agent.agents.replies import assistant_text
 from erpnext_agent.agents.runtime import (
     AgentIdentityError,

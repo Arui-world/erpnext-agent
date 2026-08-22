@@ -1,5 +1,4 @@
 import pytest
-
 from erpnext_agent.agents.orchestrator import Intent, IntentGate
 from erpnext_agent.api.chat import _fixed_policy_response
 
