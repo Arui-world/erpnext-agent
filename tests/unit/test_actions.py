@@ -472,6 +472,7 @@ async def test_proposal_tool_validates_links_and_persists_pending_action() -> No
     assert {name for name, _ in caller.calls} == {
         "erpnext_get_doctype_schema",
         "erpnext_get_list",
+        "erpnext_get_user_business_context",
     }
     assert CREATE_DRAFT_TOOL not in {name for name, _ in caller.calls}
 

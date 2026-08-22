@@ -4,6 +4,7 @@ READ_TOOLS = frozenset(
     {
         "erpnext_health",
         "erpnext_get_current_user",
+        "erpnext_get_user_business_context",
         "erpnext_search_doctypes",
         "erpnext_get_doctype_schema",
         "erpnext_get_list",

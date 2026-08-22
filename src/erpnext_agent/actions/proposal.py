@@ -248,6 +248,7 @@ class ActionProposalService:
     ) -> ActionRecord:
         normalized = validate_action_arguments(tool_name, arguments)
         await self._validate_schema(access_token, normalized)
+        await self._resolve_warehouse_alias(access_token, normalized)
         source_versions = await self._validate_current_document(
             access_token,
             tool_name,
@@ -270,6 +271,81 @@ class ActionProposalService:
         )
         await session.commit()
         return record
+
+    async def _resolve_warehouse_alias(
+        self,
+        access_token: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        """Expand a bare warehouse label using the current user's company abbreviation."""
+        payload = arguments["payload"]
+        values: list[tuple[dict[str, Any], str]] = []
+        for row in payload.get("items", []):
+            if isinstance(row, dict) and isinstance(row.get("warehouse"), str):
+                values.append((row, "warehouse"))
+        if isinstance(payload.get("set_warehouse"), str):
+            values.append((payload, "set_warehouse"))
+        if not values:
+            return
+
+        unresolved: list[tuple[dict[str, Any], str, str]] = []
+        for target, field in values:
+            value = target[field].strip()
+            exact = await self._caller.call_tool(
+                access_token=access_token,
+                name="erpnext_get_list",
+                arguments={
+                    "doctype": "Warehouse", "fields": ["name"],
+                    "filters": {"name": value}, "limit_start": 0, "limit_page_length": 2,
+                },
+            )
+            rows = exact.data.get("rows", []) if isinstance(exact.data, dict) else []
+            if not any(isinstance(row, dict) and row.get("name") == value for row in rows):
+                unresolved.append((target, field, value))
+        if not unresolved:
+            return
+        try:
+            context = await self._caller.call_tool(
+                access_token=access_token, name="erpnext_get_user_business_context", arguments={}
+            )
+        except (MCPError, MCPContractError, AssertionError):
+            context = None
+        data = context.data if context is not None else None
+        abbr = data.get("company_abbr") if isinstance(data, dict) else None
+        if not isinstance(abbr, str) or not abbr.strip():
+            company = payload.get("company")
+            if isinstance(company, str) and company.strip():
+                try:
+                    company_result = await self._caller.call_tool(
+                        access_token=access_token,
+                        name="erpnext_get_list",
+                        arguments={
+                            "doctype": "Company", "fields": ["name", "abbr"],
+                            "filters": {"name": company.strip()}, "limit_start": 0, "limit_page_length": 2,
+                        },
+                    )
+                    company_rows = company_result.data.get("rows", []) if isinstance(company_result.data, dict) else []
+                    abbr = company_rows[0].get("abbr") if len(company_rows) == 1 else None
+                except (MCPError, MCPContractError, AssertionError):
+                    abbr = None
+        if not isinstance(abbr, str) or not abbr.strip():
+            return
+        for target, field, value in unresolved:
+            candidate = f"{value} - {abbr.strip()}"
+            result = await self._caller.call_tool(
+                access_token=access_token,
+                name="erpnext_get_list",
+                arguments={
+                    "doctype": "Warehouse",
+                    "fields": ["name"],
+                    "filters": {"name": ["like", candidate + "%"]},
+                    "limit_start": 0,
+                    "limit_page_length": 2,
+                },
+            )
+            candidate_rows = result.data.get("rows", []) if isinstance(result.data, dict) else []
+            if len(candidate_rows) == 1:
+                target[field] = candidate_rows[0].get("name", candidate)
 
     async def _validate_schema(
         self,
@@ -388,6 +464,8 @@ _ARGUMENTS_SCHEMA_DESCRIPTION = (
     "material_request_type, company, transaction_date, schedule_date and items. Dates use "
     "YYYY-MM-DD. 'items' is an array of row objects; every row needs item_code and a "
     "positive numeric qty, and the target warehouse field is named 'warehouse'. Example: "
+    "Warehouse values may be a bare label such as '仓库'; the service resolves a unique current-company "
+    "warehouse alias, so do not require the user to provide the '- abbreviation' suffix. "
     "{\"doctype\": \"Sales Order\", \"payload\": {\"customer\": \"<name>\", \"company\": "
     "\"<name>\", \"transaction_date\": \"2026-08-17\", \"delivery_date\": \"2026-08-24\", "
     "\"items\": [{\"item_code\": \"<code>\", \"qty\": 1, \"warehouse\": \"<name>\"}]}}. "

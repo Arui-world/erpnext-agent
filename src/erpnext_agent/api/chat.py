@@ -339,6 +339,19 @@ async def chat(
         ),
     )
     agent = runtime.agent_for(decision.intent)
+    agent_messages = turn.messages
+    if decision.intent == Intent.ACTION:
+        agent_messages = [
+            AssistantMsg(
+                name="runtime_action_context",
+                content=(
+                    "运行时规则：仓库字段可以使用用户提供的简称，例如‘仓库’。这不是缺失参数，"
+                    "不得要求用户补充‘仓库 - 公司简称’。直接调用 erpnext_propose_draft_action；"
+                    "服务端会按当前用户权限解析唯一完整 Warehouse 名称。"
+                ),
+            ),
+            *turn.messages,
+        ]
     telemetry = cast(Telemetry, request.app.state.telemetry)
     settings = cast(Settings, request.app.state.settings)
     with telemetry.span(
@@ -351,7 +364,7 @@ async def chat(
     ) as span:
         try:
             async with asyncio.timeout(settings.agent_turn_timeout_seconds):
-                reply = await agent.reply(turn.messages)
+                reply = await agent.reply(agent_messages)
         except TimeoutError as exc:
             set_span_result(span, "AGENT_TURN_TIMEOUT", error=True)
             raise HTTPException(status_code=504, detail="Agent turn timed out") from exc
@@ -730,9 +743,21 @@ async def _persistent_reply_events(
     async def persist_reply(content: str) -> None:
         await _persist_assistant(db, repository, turn.conversation_id, content)
 
+    messages = turn.messages
+    if action_proposal_tool is not None:
+        messages = [
+            AssistantMsg(
+                name="runtime_action_context",
+                content=(
+                    "运行时规则：仓库简称不是缺失参数，不得要求用户补充完整后缀。"
+                    "直接调用 erpnext_propose_draft_action，由服务端解析唯一完整 Warehouse。"
+                ),
+            ),
+            *messages,
+        ]
     async for event in _reply_events(
         agent,
-        turn.messages,
+        messages,
         on_complete=persist_reply,
         action_proposal_tool=action_proposal_tool,
         telemetry=telemetry,

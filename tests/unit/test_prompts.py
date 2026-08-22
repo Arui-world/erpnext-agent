@@ -20,3 +20,6 @@ def test_action_agent_can_only_create_persistent_proposals() -> None:
     assert "不会写入 ERPNext" in ACTION_SYSTEM_PROMPT
     assert "不得直接调用 ERPNext 写工具" in ACTION_SYSTEM_PROMPT
     assert "不能声称已提交、已过账或已预占库存" in ACTION_SYSTEM_PROMPT
+    assert "不要因此追问" in ACTION_SYSTEM_PROMPT
+    assert "手工补充“仓库 - rw”等完整名称" in ACTION_SYSTEM_PROMPT
+    assert "不属于缺失参数" in ACTION_SYSTEM_PROMPT
