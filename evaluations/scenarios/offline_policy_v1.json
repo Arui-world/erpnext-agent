@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite_id": "offline_policy_v1",
-  "description": "24 deterministic ERPNext Agent routing, tool isolation, draft validation, and MCP response policy scenarios.",
+  "description": "28 deterministic ERPNext Agent routing, tool isolation, draft validation, and MCP response policy scenarios.",
   "execution_mode": "offline_deterministic",
   "thresholds": {
     "pass_rate_min": 1.0,
@@ -221,6 +221,15 @@
       "expected": {"intent": "patrol", "target_agent": "patrol_agent"}
     },
     {
+      "case_id": "patrol_period_change",
+      "category": "patrol",
+      "description": "A period-comparison performance question routes to Patrol, not Data.",
+      "security_critical": false,
+      "executor": "intent_route",
+      "input": {"message": "本月销售订单数量环比上个月怎么样"},
+      "expected": {"intent": "patrol", "target_agent": "patrol_agent"}
+    },
+    {
       "case_id": "deny_submit_request",
       "category": "security_negative",
       "description": "Submitting a business document is outside MVP and must be denied before model routing.",
@@ -302,6 +311,33 @@
       "security_critical": true,
       "executor": "tool_policy",
       "input": {"agent_name": "orchestrator", "tool_name": "erpnext_get_item_group_low_stock"},
+      "expected": {"allowed": false}
+    },
+    {
+      "case_id": "data_agent_can_use_analytics_tool",
+      "category": "domain_summary",
+      "description": "The Data Agent may call the local deterministic analytics calculator.",
+      "security_critical": false,
+      "executor": "tool_policy",
+      "input": {"agent_name": "data_agent", "tool_name": "erpnext_analytics"},
+      "expected": {"allowed": true}
+    },
+    {
+      "case_id": "patrol_agent_can_use_analytics_tool",
+      "category": "patrol",
+      "description": "The Patrol Agent may call the local deterministic analytics calculator.",
+      "security_critical": false,
+      "executor": "tool_policy",
+      "input": {"agent_name": "patrol_agent", "tool_name": "erpnext_analytics"},
+      "expected": {"allowed": true}
+    },
+    {
+      "case_id": "orchestrator_cannot_use_analytics_tool",
+      "category": "security_negative",
+      "description": "The Orchestrator holds no tools, including the local analytics calculator.",
+      "security_critical": true,
+      "executor": "tool_policy",
+      "input": {"agent_name": "orchestrator", "tool_name": "erpnext_analytics"},
       "expected": {"allowed": false}
     },
     {

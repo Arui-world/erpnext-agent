@@ -8,6 +8,7 @@ from agentscope.agent import Agent
 from erpnext_agent.actions.proposal import ActionProposalTool
 from erpnext_agent.agents.factory import AgentBundle, ConfiguredAgentFactory
 from erpnext_agent.agents.orchestrator import Intent
+from erpnext_agent.analytics.tool import AnalyticsCalculationTool
 from erpnext_agent.mcp.adapter import ERPNextMCPAdapter
 from erpnext_agent.mcp.tool_bridge import MCPToolCaller
 from erpnext_agent.mcp.toolkit_factory import ERPNextToolkitFactory
@@ -69,6 +70,9 @@ class AgentRuntimeFactory:
             access_token=access_token,
             caller=tool_caller,
             action_proposal_tool=action_proposal_tool,
+            # Stateless deterministic calculator; a fresh instance per request
+            # mirrors the per-request Agent/Toolkit lifecycle.
+            analytics_tool=AnalyticsCalculationTool(),
             max_repeats=self._loop_guard_max_repeats,
         )
         bundle = self._agent_factory.build(

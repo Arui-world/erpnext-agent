@@ -112,6 +112,41 @@
       }
     },
     {
+      "case_id": "online_item_group_translated",
+      "category": "domain_summary",
+      "description": "A Chinese UI label (translated from the English docname Raw Material) resolves through the aggregate tool in one call.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "物料组 原材料 中库存低于 15 的物料有哪些"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_item_group_low_stock"],
+        "forbidden_tools": ["erpnext_get_item_stock_by_warehouses"],
+        "text_must_contain": ["test item1"]
+      }
+    },
+    {
+      "case_id": "online_analysis_period_change",
+      "category": "patrol",
+      "description": "A month-over-month comparison routes to Patrol, gathers period counts and computes the percentage with the deterministic analytics tool.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "本月销售订单数量环比上个月变化怎么样"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_count", "erpnext_analytics"],
+        "text_must_contain_any": ["环比", "增长", "下降", "%"]
+      }
+    },
+    {
       "case_id": "online_count_sales_orders",
       "category": "simple_query",
       "description": "A pure count question routes to erpnext_get_count.",

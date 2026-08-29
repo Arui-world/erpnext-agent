@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -61,9 +62,21 @@ from erpnext_agent.observability import Telemetry, set_span_result
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+logger = logging.getLogger(__name__)
+
 EMPTY_REPLY_FALLBACK = (
     "本次查询未能生成有效文本回复，请补充更精确的物料编码、仓库名称或查询条件后重试。"
 )
+TURN_TIMEOUT_FALLBACK = (
+    "本回合在时间预算内未完成，上述部分查询结果未能整理为最终答复；"
+    "请缩小问题范围或稍后重试。"
+)
+
+
+def _turn_timeout_seconds(intent: Intent, settings: Settings) -> float:
+    if intent == Intent.PATROL:
+        return settings.patrol_turn_timeout_seconds
+    return settings.agent_turn_timeout_seconds
 
 
 class ChatRequest(BaseModel):
@@ -363,10 +376,19 @@ async def chat(
         },
     ) as span:
         try:
-            async with asyncio.timeout(settings.agent_turn_timeout_seconds):
+            async with asyncio.timeout(_turn_timeout_seconds(decision.intent, settings)):
                 reply = await agent.reply(agent_messages)
         except TimeoutError as exc:
             set_span_result(span, "AGENT_TURN_TIMEOUT", error=True)
+            try:
+                await _persist_assistant(
+                    db, repository, turn.conversation_id, TURN_TIMEOUT_FALLBACK
+                )
+            except Exception:  # persistence failure must not mask the timeout
+                logger.warning(
+                    "Failed to persist timeout fallback for conversation %s",
+                    turn.conversation_id,
+                )
             raise HTTPException(status_code=504, detail="Agent turn timed out") from exc
         except Exception as exc:
             set_span_result(span, "MODEL_REPLY_FAILED", error=True)
@@ -449,7 +471,7 @@ async def chat_stream(
             action_proposal_tool=runtime.action_proposal_tool,
             telemetry=telemetry,
             parent_context=telemetry.current_context(),
-            timeout_seconds=settings.agent_turn_timeout_seconds,
+            timeout_seconds=_turn_timeout_seconds(decision.intent, settings),
         ):
             yield event
 
@@ -850,6 +872,17 @@ async def _reply_events(
                     yield _sse("done", {"finished_reason": reason})
         except TimeoutError:
             set_span_result(span, "AGENT_TURN_TIMEOUT", error=True)
+            if on_complete is not None:
+                # Persist what the model managed to stream before the budget
+                # expired so history is diagnosable; never mask the timeout.
+                partial = "".join(text_chunks).strip()
+                content = (
+                    f"{partial}\n\n{TURN_TIMEOUT_FALLBACK}" if partial else TURN_TIMEOUT_FALLBACK
+                )
+                try:
+                    await on_complete(content)
+                except Exception:
+                    logger.warning("Failed to persist the partial timed-out reply")
             yield _sse(
                 "error",
                 {"code": "AGENT_TURN_TIMEOUT", "message": "Agent turn timed out"},

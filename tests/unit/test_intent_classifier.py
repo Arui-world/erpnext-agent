@@ -161,3 +161,14 @@ async def test_classifier_timeout_degrades_without_blocking_request() -> None:
 
     assert decision.intent == Intent.CLARIFY
     assert decision.reason == "intent is incomplete"
+
+
+def test_classifier_prompt_defines_data_patrol_boundary() -> None:
+    from erpnext_agent.agents.intent_classifier import INTENT_CLASSIFIER_SYSTEM_PROMPT
+
+    assert "跨期比较" in INTENT_CLASSIFIER_SYSTEM_PROMPT
+    assert "业绩回顾" in INTENT_CLASSIFIER_SYSTEM_PROMPT
+    assert "环比" in INTENT_CLASSIFIER_SYSTEM_PROMPT
+    assert "给出下一步建议" in INTENT_CLASSIFIER_SYSTEM_PROMPT
+    # Write-safety delegation to the deterministic layer stays intact.
+    assert "提交、作废、删除" in INTENT_CLASSIFIER_SYSTEM_PROMPT

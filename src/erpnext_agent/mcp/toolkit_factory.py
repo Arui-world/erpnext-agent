@@ -42,6 +42,7 @@ class ERPNextToolkitFactory:
         access_token: str,
         caller: MCPToolCaller | None = None,
         action_proposal_tool: ToolBase | None = None,
+        analytics_tool: ToolBase | None = None,
         max_repeats: int = 3,
     ) -> AgentToolkits:
         by_name: dict[str, dict[str, Any]] = {}
@@ -71,7 +72,7 @@ class ERPNextToolkitFactory:
                 tools.append(tool)
             for extra in extra_tools or []:
                 if extra.name in by_name or any(tool.name == extra.name for tool in tools):
-                    raise ValueError(f"Duplicate Action tool definition: {extra.name}")
+                    raise ValueError(f"Duplicate local tool definition: {extra.name}")
                 tools.append(extra)
             return Toolkit(
                 tools=tools,
@@ -82,12 +83,15 @@ class ERPNextToolkitFactory:
             if action_proposal_tool is not None
             else ACTION_AGENT_TOOLS
         )
+        extras = [analytics_tool] if analytics_tool is not None else None
         return AgentToolkits(
             orchestrator=toolkit(ORCHESTRATOR_TOOLS),
-            data=toolkit(DATA_AGENT_TOOLS),
+            data=toolkit(DATA_AGENT_TOOLS, extra_tools=extras),
             action=toolkit(
                 action_tools,
-                extra_tools=[action_proposal_tool] if action_proposal_tool is not None else None,
+                extra_tools=(
+                    [action_proposal_tool] if action_proposal_tool is not None else None
+                ),
             ),
-            patrol=toolkit(PATROL_AGENT_TOOLS),
+            patrol=toolkit(PATROL_AGENT_TOOLS, extra_tools=extras),
         )

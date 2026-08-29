@@ -27,9 +27,9 @@ def test_offline_suite_is_versioned_unique_and_complete() -> None:
 
     assert suite.schema_version == 1
     assert suite.execution_mode == "offline_deterministic"
-    assert len(suite.cases) == 24
+    assert len(suite.cases) == 28
     assert len({case.case_id for case in suite.cases}) == len(suite.cases)
-    assert sum(case.security_critical for case in suite.cases) == 14
+    assert sum(case.security_critical for case in suite.cases) == 15
     assert {
         category: sum(case.category == category for case in suite.cases)
         for category in {
@@ -42,19 +42,19 @@ def test_offline_suite_is_versioned_unique_and_complete() -> None:
         }
     } == {
         "simple_query": 2,
-        "domain_summary": 3,
+        "domain_summary": 4,
         "multi_step": 2,
         "draft_action": 5,
-        "patrol": 3,
-        "security_negative": 9,
+        "patrol": 5,
+        "security_negative": 10,
     }
 
 
 def test_offline_suite_passes_its_declared_thresholds() -> None:
     report = EvaluationRunner().run(load_suite(SUITE_PATH))
 
-    assert report.summary.total == 24
-    assert report.summary.passed == 24
+    assert report.summary.total == 28
+    assert report.summary.passed == 28
     assert report.summary.failed == 0
     assert report.summary.pass_rate == 1.0
     assert report.summary.security_violations == 0

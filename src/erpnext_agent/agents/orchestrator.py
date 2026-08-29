@@ -24,7 +24,19 @@ class IntentGate:
 
     _forbidden = ("提交", "作废", "删除", "过账", "submit", "cancel", "delete")
     _action = ("创建", "新建", "修改", "更新", "create", "update")
-    _patrol = ("巡检", "异常", "预警", "逾期", "threshold", "patrol")
+    _patrol = (
+        "巡检",
+        "异常",
+        "预警",
+        "逾期",
+        "业绩",
+        "环比",
+        "同比",
+        "趋势",
+        "建议",
+        "threshold",
+        "patrol",
+    )
     _data = ("查询", "查看", "多少", "统计", "分析", "库存", "应收", "list", "show")
 
     def route(self, message: str) -> RouteDecision:

@@ -5,6 +5,25 @@ from erpnext_agent.agents.prompts import (
 )
 
 
+def test_patrol_agent_is_an_agentic_investigator() -> None:
+    assert "自主决定" in PATROL_SYSTEM_PROMPT
+    assert "界定问题" in PATROL_SYSTEM_PROMPT
+    assert "最小证据集" in PATROL_SYSTEM_PROMPT
+    assert "erpnext_analytics" in PATROL_SYSTEM_PROMPT
+    assert "禁止心算" in PATROL_SYSTEM_PROMPT
+    assert "结论逐条附上数据依据" in PATROL_SYSTEM_PROMPT
+    # Safety posture survives the rewrite.
+    assert "全库扫描" in PATROL_SYSTEM_PROMPT
+    assert "不得编造" in PATROL_SYSTEM_PROMPT
+    assert "erpnext_get_receivables_summary" in PATROL_SYSTEM_PROMPT
+    assert "erpnext_get_item_group_low_stock" in PATROL_SYSTEM_PROMPT
+
+
+def test_data_agent_must_use_analytics_for_percentages() -> None:
+    assert "erpnext_analytics" in DATA_SYSTEM_PROMPT
+    assert "不得自行心算百分比" in DATA_SYSTEM_PROMPT
+
+
 def test_data_agent_uses_item_group_aggregate_tool() -> None:
     assert "erpnext_get_item_group_low_stock" in DATA_SYSTEM_PROMPT
     assert "只调用一次" in DATA_SYSTEM_PROMPT

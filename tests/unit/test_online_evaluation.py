@@ -231,16 +231,16 @@ def test_online_suite_file_shape():
     )
     suite = load_suite(path)
     assert suite.execution_mode == "online_authenticated"
-    assert len(suite.cases) == 24
+    assert len(suite.cases) == 26
     distribution = {}
     for case in suite.cases:
         distribution[case.category] = distribution.get(case.category, 0) + 1
     assert distribution == {
         "simple_query": 9,
-        "domain_summary": 5,
+        "domain_summary": 6,
         "multi_step": 4,
         "draft_action": 4,
-        "patrol": 2,
+        "patrol": 3,
     }
     ids = [case.case_id for case in suite.cases]
     assert len(set(ids)) == len(ids)

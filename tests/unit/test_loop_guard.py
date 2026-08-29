@@ -251,3 +251,42 @@ async def test_toolkit_factory_wraps_only_read_tools() -> None:
     for name in sorted(READ_TOOLS):
         action_read = await toolkits.action.get_tool(name)
         assert isinstance(action_read, LoopGuardTool)
+
+
+@pytest.mark.asyncio
+async def test_analytics_tool_injected_only_into_data_and_patrol() -> None:
+    from erpnext_agent.analytics.tool import AnalyticsCalculationTool
+    from erpnext_agent.mcp.policy import ANALYTICS_TOOL_NAME
+
+    specs = [_tool_spec(name) for name in sorted(EXPECTED_TOOLS)]
+    toolkits = ERPNextToolkitFactory(_StubAdapter()).build_from_specs(  # type: ignore[arg-type]
+        specs=specs,
+        access_token="token",  # noqa: S106 - inert fixture
+        analytics_tool=AnalyticsCalculationTool(),
+    )
+    for toolkit in (toolkits.data, toolkits.patrol):
+        injected = await toolkit.get_tool(ANALYTICS_TOOL_NAME)
+        assert isinstance(injected, AnalyticsCalculationTool)
+        # Local tools bypass the MCP-only LoopGuard wrapper by construction.
+        assert not isinstance(injected, LoopGuardTool)
+    for toolkit in (toolkits.orchestrator, toolkits.action):
+        assert await toolkit.get_tool(ANALYTICS_TOOL_NAME) is None
+
+
+@pytest.mark.asyncio
+async def test_analytics_tool_name_collision_fails_closed() -> None:
+    from erpnext_agent.analytics.tool import AnalyticsCalculationTool
+    from erpnext_agent.mcp.policy import ANALYTICS_TOOL_NAME
+
+    # A spec shadowing the local tool must be rejected before registration:
+    # unknown names fail the EXPECTED_TOOLS validation first, and a name that
+    # somehow passes validation hits the duplicate guard in toolkit().
+    specs = [
+        _tool_spec(name) for name in sorted(EXPECTED_TOOLS)
+    ] + [_tool_spec(ANALYTICS_TOOL_NAME)]
+    with pytest.raises(ValueError):
+        ERPNextToolkitFactory(_StubAdapter()).build_from_specs(  # type: ignore[arg-type]
+            specs=specs,
+            access_token="token",  # noqa: S106 - inert fixture
+            analytics_tool=AnalyticsCalculationTool(),
+        )

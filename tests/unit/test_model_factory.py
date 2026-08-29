@@ -143,6 +143,48 @@ def test_invalid_summary_message_window_fails_configuration(
         )
 
 
+def test_patrol_budget_defaults_and_configured_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = settings_from_environment(
+        monkeypatch,
+        MODEL_PROVIDER="openai",
+        MODEL_NAME="openai-model",
+        MODEL_API_KEY="test-api-key",
+    )
+    assert settings.patrol_max_iterations == 12
+    assert settings.patrol_turn_timeout_seconds == 150.0
+
+    settings = settings_from_environment(
+        monkeypatch,
+        MODEL_PROVIDER="openai",
+        MODEL_NAME="openai-model",
+        MODEL_API_KEY="test-api-key",
+        PATROL_MAX_ITERATIONS="16",
+        PATROL_TURN_TIMEOUT_SECONDS="200",
+    )
+    bundle = ConfiguredAgentFactory(settings).build(
+        orchestrator_toolkit=Toolkit(),
+        data_toolkit=Toolkit(),
+        action_toolkit=Toolkit(),
+        patrol_toolkit=Toolkit(),
+    )
+    assert bundle.patrol_agent.react_config.max_iters == 16
+    assert bundle.data_agent.react_config.max_iters == 8
+    assert bundle.action_agent.react_config.max_iters == 8
+
+
+def test_patrol_timeout_below_base_fails_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="PATROL_TURN_TIMEOUT_SECONDS"):
+        settings_from_environment(
+            monkeypatch,
+            AGENT_TURN_TIMEOUT_SECONDS="120",
+            PATROL_TURN_TIMEOUT_SECONDS="60",
+        )
+
+
 def test_action_recovery_configuration_fails_for_unsafe_timing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -35,6 +35,18 @@ FORBIDDEN_TOOLS = frozenset(
     }
 )
 
+# Local (non-MCP) read-only tools. They must never enter READ_TOOLS or
+# EXPECTED_TOOLS: the MCP adapter enforces strict set equality against the
+# server's tools/list, and the toolkit assembly fails closed on a missing MCP
+# spec. Agent availability is declared per tool here and merged into the
+# policy view used by assert_tool_allowed and the offline evaluation executor.
+ANALYTICS_TOOL_NAME = "erpnext_analytics"
+LOCAL_READ_TOOLS = frozenset({ANALYTICS_TOOL_NAME})
+_LOCAL_TOOL_AGENTS: dict[str, frozenset[str]] = {
+    "data_agent": frozenset({ANALYTICS_TOOL_NAME}),
+    "patrol_agent": frozenset({ANALYTICS_TOOL_NAME}),
+}
+
 
 class ToolPolicyError(PermissionError):
     pass
@@ -48,9 +60,10 @@ def tools_for_agent(agent_name: str) -> frozenset[str]:
         "orchestrator": ORCHESTRATOR_TOOLS,
     }
     try:
-        return policies[agent_name]
+        mcp_tools = policies[agent_name]
     except KeyError as exc:
         raise ToolPolicyError(f"Unknown agent policy: {agent_name}") from exc
+    return mcp_tools | _LOCAL_TOOL_AGENTS.get(agent_name, frozenset())
 
 
 def assert_tool_allowed(agent_name: str, tool_name: str) -> None:

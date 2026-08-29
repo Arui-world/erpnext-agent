@@ -59,6 +59,7 @@ class ConfiguredAgentFactory:
             action_toolkit=action_toolkit,
             patrol_toolkit=patrol_toolkit,
             max_retries=self._settings.model_max_retries,
+            patrol_max_iterations=self._settings.patrol_max_iterations,
         )
 
     def build_model_chat_agent(self) -> Agent:
@@ -94,6 +95,7 @@ def build_agent_bundle(
     action_toolkit: Toolkit,
     patrol_toolkit: Toolkit,
     max_retries: int = 1,
+    patrol_max_iterations: int = 8,
 ) -> AgentBundle:
     """Construct AgentScope 2.0.5 agents from already policy-filtered toolkits.
 
@@ -108,6 +110,7 @@ def build_agent_bundle(
         *,
         terminal_tools: frozenset[str] = frozenset(),
         empty_retry_tools: frozenset[str] = frozenset(),
+        max_iters: int = 8,
     ) -> Agent:
         return Agent(
             name=name,
@@ -125,7 +128,7 @@ def build_agent_bundle(
                 else None
             ),
             model_config=ModelConfig(max_retries=max_retries),
-            react_config=ReActConfig(max_iters=8, stop_on_reject=True),
+            react_config=ReActConfig(max_iters=max_iters, stop_on_reject=True),
         )
 
     return AgentBundle(
@@ -144,5 +147,10 @@ def build_agent_bundle(
             empty_retry_tools=frozenset({"erpnext_get_list"}),
         ),
         action_agent=make("action_agent", ACTION_SYSTEM_PROMPT, action_toolkit),
-        patrol_agent=make("patrol_agent", PATROL_SYSTEM_PROMPT, patrol_toolkit),
+        patrol_agent=make(
+            "patrol_agent",
+            PATROL_SYSTEM_PROMPT,
+            patrol_toolkit,
+            max_iters=patrol_max_iterations,
+        ),
     )

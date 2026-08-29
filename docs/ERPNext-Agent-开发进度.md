@@ -1,10 +1,33 @@
 # ERPNext Agent 开发进度
 
 > 最后更新：2026-08-28
-> 当前阶段：物料组低库存查询端到端修复完成（MCP 聚合工具 + Agent 守护逻辑），在线评估 24/24
+> 当前阶段：自主分析型 Patrol 与翻译组名解析完成，在线评估 26/26
 > 进度记录原则：每次开发任务完成后更新本文，记录实际完成内容、验证证据、遗留项和下一步。
 
 ## 一、当前状态
+
+### 2026-08-28 自主分析型 Patrol 与翻译组名解析
+
+两项同日完成（详见 2026-08-28-自主分析巡检与翻译组名解析记录.md）：
+
+1. **翻译组名修复（MCP 服务端）**："原材料"类 UI 翻译名此前报 `ITEM_GROUP_NOT_FOUND`。根因是 ERPNext
+   标准数据用英文 docname（`Raw Material`）+ gettext 语言包渲染中文。新增
+   `services/translations.py::visible_translated_names`：反查会话语言的 gettext 目录与自定义
+   Translation 记录，再与权限感知可见 docname 求交；`_resolve_item_group` 追加第四级
+   `match_method="translated"`，仅前三级零命中时启用，无契约变化。真实复现：`原材料/15` →
+   匹配 `Raw Material`，返回 `test item1 (10.0)`。
+2. **Patrol 升级为自主分析 Agent**：新增本地确定性计算工具 `erpnext_analytics`（复用 Decimal
+   `calculators.py`，data/patrol 可用，严格不进 MCP 契约集合）实现"取数归工具、百分比归计算"；
+   PATROL 提示词由固定动作表重写为五步方法论（界定问题→最小证据集→按需取数→确定性计算禁止心算→
+   结论附依据+建议）；IntentGate/分类器明确 data/patrol 边界（环比/同比/业绩/趋势/建议→patrol）；
+   patrol 预算独立（`PATROL_MAX_ITERATIONS=12`、`PATROL_TURN_TIMEOUT_SECONDS=150`）；超时回合
+   现在持久化部分文本+诊断句；删除三处零引用死脚手架（patrol/、semantic_layer+metrics.yaml、
+   AgentLimits）。
+
+已执行验证：MCP 服务端 bench 全量测试通过（新增 3 项翻译解析）+ 活体复现；Agent pytest 全量、
+Ruff、mypy strict 通过；离线 28/28 安全违规 0；在线 26/26 pass_rate 1.0 安全违规 0——
+`online_analysis_period_change` 真实走通 界定→count×2→analytics→结论（零基如实说明），
+`online_item_group_translated` 单次调用回答引用 Raw Material+test item1，既有 24 场景零回归。
 
 ### 2026-08-28 物料组低库存查询端到端修复
 
@@ -567,6 +590,9 @@ Alembic revision `20260812_0002` 已从带样例数据的 `0001` 临时库和当
 | 物料组低库存真实数据核对 | dev.localhost fixture（父组→子组，Bin 合计 3/50）：阈值 5 仅返回合计 3 的物料；阈值恰等于合计的物料被排除（严格小于） |
 | 离线套件扩展回归 | `offline_policy_v1` 24/24、退出 0、安全违规 0（新增新工具 data/patrol/action 允许与 orchestrator 拒绝 4 项） |
 | 在线套件扩展验收 | `online_authenticated_v1` 24/24、pass_rate 1.0、安全违规 0；`online_item_group_low_stock` 单次聚合工具调用且回答引用 scope；既有 22 场景无回归 |
+| 翻译组名解析 | MCP 全量测试新增 3 项（Translation 命中/多候选歧义/幽灵源名失败关闭）；活体复现 `原材料/15` → `Raw Material`（translated）、返回 `test item1 10.0` |
+| Patrol 自主分析 | 在线 `online_analysis_period_change`：路由 patrol_agent，count×2+`erpnext_analytics` 后给出带表结论，零基如实说明；`online_patrol_inventory_anomaly` 范围不足先追问；analytics 策略离线 3 项（data/patrol 允许、orchestrator 拒绝） |
+| 套件最终回归（本轮后） | 离线 28/28、在线 26/26、pass_rate 1.0、安全违规 0；`online_natural_sales_overview` 仍路由 data_agent；pytest 全量 + Ruff + mypy strict 通过 |
 | 在线验收（--repeat 3） | 两用户真实登录后取得三轮全部 20/20、通过率 100%、安全违规 0、`threshold_passed=true`；三类草稿真实写入并回读 `docstatus=0`，REST 清理全部成功 |
 | 跨用户隔离真实验证 | secondary 对 primary 的 Action decision/execute 均返回 404；低权限库存查询未越权 |
 | 草稿执行 409 | 历史复跑曾偶发 409；本次最终 22 场景验收中三类草稿提案→审批→执行→回读→清理全部通过，仍建议后续多轮持续观测 |

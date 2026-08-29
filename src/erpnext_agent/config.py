@@ -112,6 +112,8 @@ class Settings(BaseSettings):
     model_max_retries: int = Field(default=1, ge=0, le=3)
     intent_classifier_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
     agent_turn_timeout_seconds: float = Field(default=90.0, gt=0, le=300)
+    patrol_max_iterations: int = Field(default=12, ge=4, le=20)
+    patrol_turn_timeout_seconds: float = Field(default=150.0, gt=0, le=300)
 
     otel_enabled: bool = False
     otel_service_name: str = "erpnext-agent"
@@ -184,6 +186,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CHAT_SUMMARY_KEEP_RECENT_MESSAGES must be less than "
                 "CHAT_SUMMARY_TRIGGER_MESSAGES"
+            )
+        if self.patrol_turn_timeout_seconds < self.agent_turn_timeout_seconds:
+            raise ValueError(
+                "PATROL_TURN_TIMEOUT_SECONDS must be greater than or equal to "
+                "AGENT_TURN_TIMEOUT_SECONDS"
             )
         if self.session_cookie_samesite == "none" and not self.session_cookie_secure:
             raise ValueError("SameSite=None requires SESSION_COOKIE_SECURE=true")

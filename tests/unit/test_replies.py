@@ -9,7 +9,12 @@ from agentscope.message import TextBlock, UserMsg
 from erpnext_agent.actions.models import ActionRecord, ActionStatus
 from erpnext_agent.actions.proposal import action_summary_markdown
 from erpnext_agent.agents.replies import assistant_text
-from erpnext_agent.api.chat import EMPTY_REPLY_FALLBACK, _reply_events, _sse
+from erpnext_agent.api.chat import (
+    EMPTY_REPLY_FALLBACK,
+    TURN_TIMEOUT_FALLBACK,
+    _reply_events,
+    _sse,
+)
 
 
 def test_assistant_text_joins_text_blocks() -> None:
@@ -109,6 +114,86 @@ async def test_stream_timeout_returns_stable_error_event() -> None:
         async for event in _reply_events(  # type: ignore[arg-type]
             SlowReplyAgent(),
             "查看当前库存",
+            timeout_seconds=0.001,
+        )
+    ]
+
+    assert events == [
+        _sse(
+            "error",
+            {"code": "AGENT_TURN_TIMEOUT", "message": "Agent turn timed out"},
+        )
+    ]
+
+
+async def test_stream_timeout_persists_partial_text_with_diagnostic_marker() -> None:
+    class StallingAgent:
+        async def reply_stream(self, _message: UserMsg):
+            yield TextBlockDeltaEvent(reply_id="reply-1", block_id="text-1", delta="已查到部分数据")
+            await asyncio.sleep(0.05)
+            yield ReplyEndEvent(session_id="session-1", reply_id="reply-1")
+
+    persisted: list[str] = []
+
+    async def persist(content: str) -> None:
+        persisted.append(content)
+
+    events = [
+        event
+        async for event in _reply_events(  # type: ignore[arg-type]
+            StallingAgent(),
+            "分析本月业绩",
+            on_complete=persist,
+            timeout_seconds=0.001,
+        )
+    ]
+
+    assert persisted == [f"已查到部分数据\n\n{TURN_TIMEOUT_FALLBACK}"]
+    assert events[-1] == _sse(
+        "error",
+        {"code": "AGENT_TURN_TIMEOUT", "message": "Agent turn timed out"},
+    )
+
+
+async def test_stream_timeout_persists_marker_only_without_partial_text() -> None:
+    class StallingAgent:
+        async def reply_stream(self, _message: UserMsg):
+            await asyncio.sleep(0.05)
+            yield ReplyEndEvent(session_id="session-1", reply_id="reply-1")
+
+    persisted: list[str] = []
+
+    async def persist(content: str) -> None:
+        persisted.append(content)
+
+    _ = [
+        event
+        async for event in _reply_events(  # type: ignore[arg-type]
+            StallingAgent(),
+            "分析本月业绩",
+            on_complete=persist,
+            timeout_seconds=0.001,
+        )
+    ]
+
+    assert persisted == [TURN_TIMEOUT_FALLBACK]
+
+
+async def test_stream_timeout_persistence_failure_does_not_mask_timeout() -> None:
+    class StallingAgent:
+        async def reply_stream(self, _message: UserMsg):
+            await asyncio.sleep(0.05)
+            yield ReplyEndEvent(session_id="session-1", reply_id="reply-1")
+
+    async def broken_persist(_content: str) -> None:
+        raise RuntimeError("database is down")
+
+    events = [
+        event
+        async for event in _reply_events(  # type: ignore[arg-type]
+            StallingAgent(),
+            "分析本月业绩",
+            on_complete=broken_persist,
             timeout_seconds=0.001,
         )
     ]
