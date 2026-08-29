@@ -87,6 +87,7 @@ FIXTURE_ENV: dict[str, str] = {
     "supplier": "EVAL_ONLINE_SUPPLIER",
     "item": "EVAL_ONLINE_ITEM",
     "warehouse": "EVAL_ONLINE_WAREHOUSE",
+    "item_group": "EVAL_ONLINE_ITEM_GROUP",
 }
 DATE_KEYS: tuple[str, ...] = ("today", "delivery_date", "schedule_date")
 PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")

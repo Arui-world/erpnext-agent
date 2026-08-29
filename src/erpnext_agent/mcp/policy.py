@@ -12,6 +12,7 @@ READ_TOOLS = frozenset(
         "erpnext_get_count",
         "erpnext_get_stock_balance",
         "erpnext_get_item_stock_by_warehouses",
+        "erpnext_get_item_group_low_stock",
         "erpnext_get_customer_summary",
         "erpnext_get_supplier_summary",
         "erpnext_get_receivables_summary",

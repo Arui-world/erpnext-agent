@@ -59,6 +59,33 @@ class FakeWriteTool(FakeReadTool):
     is_concurrency_safe = False
 
 
+class FlakyReadTool(FakeReadTool):
+    """Fails the first call so error handling can be observed by the guard."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._failures_remaining = 1
+
+    async def call(self, **kwargs: Any) -> ToolChunk:
+        self.calls.append(dict(kwargs))
+        if self._failures_remaining:
+            self._failures_remaining -= 1
+            return ToolChunk(
+                content=[
+                    TextBlock(
+                        text=json.dumps(
+                            {"ok": False, "error": {"code": "INVALID_TOOL_ARGUMENT"}}
+                        )
+                    )
+                ],
+                state=ToolResultState.ERROR,
+            )
+        return ToolChunk(
+            content=[TextBlock(text=json.dumps({"ok": True, "n": len(self.calls)}))],
+            state=ToolResultState.SUCCESS,
+        )
+
+
 def _payload(chunk: ToolChunk) -> dict[str, Any]:
     assert isinstance(chunk.content[0], TextBlock)
     return json.loads(chunk.content[0].text)
@@ -140,6 +167,38 @@ async def test_loop_guard_error_chunk_shape() -> None:
     assert payload["error"]["code"] == REPEATED_TOOL_CALL
     assert payload["error"]["message"]
     assert blocked.metadata == {"code": REPEATED_TOOL_CALL}
+
+
+@pytest.mark.asyncio
+async def test_loop_guard_error_result_does_not_consume_allowance() -> None:
+    inner = FlakyReadTool()
+    guard = LoopGuardTool(tool=inner, max_repeats=2)
+    failed = await guard.call(query="x")
+    assert failed.state == ToolResultState.ERROR
+    # The identical retry must reach the inner tool: the failed attempt was
+    # rolled back out of the signature history.
+    retried = await guard.call(query="x")
+    assert retried.state == ToolResultState.SUCCESS
+    assert len(inner.calls) == 2
+    # Now a successful result exists and occupies the max_repeats=2 allowance.
+    blocked = await guard.call(query="x")
+    assert blocked.state == ToolResultState.ERROR
+    assert blocked.metadata == {"code": REPEATED_TOOL_CALL}
+    assert len(inner.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_loop_guard_repeated_message_stays_corrective() -> None:
+    guard = LoopGuardTool(tool=FakeReadTool(), max_repeats=2)
+    await guard.call(query="x")
+    blocked = await guard.call(query="x")
+    message = _payload(blocked)["error"]["message"]
+    # Never claim a valid result was already returned, and never push an
+    # empty-rows answer onto the model.
+    assert "已经返回过有效结果" not in message
+    assert "就明确回答没有记录" not in message
+    assert "相同参数" in message
+    assert "更换过滤条件" in message
 
 
 @pytest.mark.asyncio

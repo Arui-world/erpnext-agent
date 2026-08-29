@@ -231,13 +231,13 @@ def test_online_suite_file_shape():
     )
     suite = load_suite(path)
     assert suite.execution_mode == "online_authenticated"
-    assert len(suite.cases) == 22
+    assert len(suite.cases) == 24
     distribution = {}
     for case in suite.cases:
         distribution[case.category] = distribution.get(case.category, 0) + 1
     assert distribution == {
-        "simple_query": 8,
-        "domain_summary": 4,
+        "simple_query": 9,
+        "domain_summary": 5,
         "multi_step": 4,
         "draft_action": 4,
         "patrol": 2,
@@ -697,6 +697,7 @@ def test_cli_exit_code_3_for_missing_online_env(monkeypatch, capsys):
         "EVAL_ONLINE_SUPPLIER",
         "EVAL_ONLINE_ITEM",
         "EVAL_ONLINE_WAREHOUSE",
+        "EVAL_ONLINE_ITEM_GROUP",
     ]:
         monkeypatch.delenv(var, raising=False)
 

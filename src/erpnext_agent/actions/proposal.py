@@ -320,11 +320,18 @@ class ActionProposalService:
                         access_token=access_token,
                         name="erpnext_get_list",
                         arguments={
-                            "doctype": "Company", "fields": ["name", "abbr"],
-                            "filters": {"name": company.strip()}, "limit_start": 0, "limit_page_length": 2,
+                            "doctype": "Company",
+                            "fields": ["name", "abbr"],
+                            "filters": {"name": company.strip()},
+                            "limit_start": 0,
+                            "limit_page_length": 2,
                         },
                     )
-                    company_rows = company_result.data.get("rows", []) if isinstance(company_result.data, dict) else []
+                    company_rows = (
+                        company_result.data.get("rows", [])
+                        if isinstance(company_result.data, dict)
+                        else []
+                    )
                     abbr = company_rows[0].get("abbr") if len(company_rows) == 1 else None
                 except (MCPError, MCPContractError, AssertionError):
                     abbr = None
@@ -464,8 +471,9 @@ _ARGUMENTS_SCHEMA_DESCRIPTION = (
     "material_request_type, company, transaction_date, schedule_date and items. Dates use "
     "YYYY-MM-DD. 'items' is an array of row objects; every row needs item_code and a "
     "positive numeric qty, and the target warehouse field is named 'warehouse'. Example: "
-    "Warehouse values may be a bare label such as '仓库'; the service resolves a unique current-company "
-    "warehouse alias, so do not require the user to provide the '- abbreviation' suffix. "
+    "Warehouse values may be a bare label such as '仓库'; the service resolves a unique "
+    "current-company warehouse alias, so do not require the user to provide the "
+    "'- abbreviation' suffix. "
     "{\"doctype\": \"Sales Order\", \"payload\": {\"customer\": \"<name>\", \"company\": "
     "\"<name>\", \"transaction_date\": \"2026-08-17\", \"delivery_date\": \"2026-08-24\", "
     "\"items\": [{\"item_code\": \"<code>\", \"qty\": 1, \"warehouse\": \"<name>\"}]}}. "

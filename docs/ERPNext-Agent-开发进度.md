@@ -1,10 +1,37 @@
 # ERPNext Agent 开发进度
 
-> 最后更新：2026-08-22
-> 当前阶段：仓库简称运行时加固完成，物料组库存组合查询规则已恢复，待真实复测
+> 最后更新：2026-08-28
+> 当前阶段：物料组低库存查询端到端修复完成（MCP 聚合工具 + Agent 守护逻辑），在线评估 24/24
 > 进度记录原则：每次开发任务完成后更新本文，记录实际完成内容、验证证据、遗留项和下一步。
 
 ## 一、当前状态
+
+### 2026-08-28 物料组低库存查询端到端修复
+
+自然语言“物料组 X 中库存小于 N 的物料”此前误报“该物料组下没有查询到物料”。根因为三层叠加：
+`TerminalToolConvergenceMiddleware` 在 `erpnext_get_list` 成功后（含空结果）强制禁止继续调用工具，
+多步流程结构上走不完；物料组按名称等值精确匹配且不含子组，与 ERPNext 树形视图口径不一致；
+`max_iters=8` 无法承载逐物料 N+1 调用。本次修复：
+
+- MCP 服务端（erpnext_mcp_tools，独立提交 2 个）新增权限感知聚合工具
+  `erpnext_get_item_group_low_stock`：组名解析（精确→归一→唯一子串，多候选报
+  `AMBIGUOUS_ITEM_GROUP`、无候选报 `ITEM_GROUP_NOT_FOUND`）、包含全部子孙物料组、按当前用户
+  可见叶子仓库汇总 Bin 当前数量、严格小于阈值升序返回，扫描上限 200 物料并在 scope 上报截断；
+- 收敛中间件改为 payload 感知：`get_list` 首次空结果授予一次核实性重试（like/核对名称/换领域
+  工具），第二次空才强制如实答空；新聚合工具与 `get_count` 维持收敛；payload 不可解析回退原行为；
+- `LoopGuardTool` 失败调用不再占用重复配额，`REPEATED_TOOL_CALL` 文案去除虚假“已有有效结果”
+  声明与“空即答没有记录”诱导，改为指引更换过滤条件；
+- Data/Patrol 提示词改为单工具工作流（一次调用 + 必须引用 scope + 未给阈值先询问），通用列表
+  首次空结果允许一次核实性查询；工具策略将新工具纳入 data/patrol/action 只读白名单，orchestrator 无。
+
+同时修复最近两个提交遗留的 7 项 lint 问题（E501×6、F401、I001）。2026-08-22 的“物料组库存
+组合查询规则待真实复测”由本项取代：客户端 N+1 流程已删除，真实 OAuth 端到端已验证。
+
+已执行验证：MCP 服务端 bench 测试 51/51；Agent 仓库 pytest 全量、Ruff、mypy strict 通过；
+离线评估 24/24、安全违规 0；在线评估 24/24（`online_item_group_low_stock` 证据为单次新工具调用、
+finished_reason=completed、回答引用匹配组/子组数量/阈值/可见仓 scope；
+`online_item_group_nonexistent` 单次调用后如实回答未找到）；既有 22 在线场景无回归。
+详见 2026-08-28-物料组低库存查询端到端修复记录.md。
 
 ### 2026-08-22 物料组库存组合查询边界修正
 
@@ -536,6 +563,10 @@ Alembic revision `20260812_0002` 已从带样例数据的 `0001` 临时库和当
 | 长对话真实摘要验收 | 通过；严格 1 次真实模型调用，摘要覆盖 sequence 1–8、保留 9–12 且 12 条原始消息未减少 |
 | 可靠性加固单元测试 | 请求体/限流/收敛/模型配置/参数兼容与严格门禁回归全部通过 |
 | 离线套件镜像内回归 | `offline_policy_v1` 20/20、退出 0、安全违规 0（含全部加固改动后复测） |
+| 物料组低库存 MCP 服务端测试 | `bench run-tests --app erpnext_mcp_tools` 51/51（新增子孙组+阈值、归一解析、歧义、未找到 4 项与 16 工具协议断言），`frappe-mcp check` 通过 |
+| 物料组低库存真实数据核对 | dev.localhost fixture（父组→子组，Bin 合计 3/50）：阈值 5 仅返回合计 3 的物料；阈值恰等于合计的物料被排除（严格小于） |
+| 离线套件扩展回归 | `offline_policy_v1` 24/24、退出 0、安全违规 0（新增新工具 data/patrol/action 允许与 orchestrator 拒绝 4 项） |
+| 在线套件扩展验收 | `online_authenticated_v1` 24/24、pass_rate 1.0、安全违规 0；`online_item_group_low_stock` 单次聚合工具调用且回答引用 scope；既有 22 场景无回归 |
 | 在线验收（--repeat 3） | 两用户真实登录后取得三轮全部 20/20、通过率 100%、安全违规 0、`threshold_passed=true`；三类草稿真实写入并回读 `docstatus=0`，REST 清理全部成功 |
 | 跨用户隔离真实验证 | secondary 对 primary 的 Action decision/execute 均返回 404；低权限库存查询未越权 |
 | 草稿执行 409 | 历史复跑曾偶发 409；本次最终 22 场景验收中三类草稿提案→审批→执行→回读→清理全部通过，仍建议后续多轮持续观测 |

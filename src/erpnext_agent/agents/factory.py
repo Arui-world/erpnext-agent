@@ -107,6 +107,7 @@ def build_agent_bundle(
         toolkit: Toolkit,
         *,
         terminal_tools: frozenset[str] = frozenset(),
+        empty_retry_tools: frozenset[str] = frozenset(),
     ) -> Agent:
         return Agent(
             name=name,
@@ -114,7 +115,12 @@ def build_agent_bundle(
             model=model,
             toolkit=toolkit,
             middlewares=(
-                [TerminalToolConvergenceMiddleware(terminal_tools)]
+                [
+                    TerminalToolConvergenceMiddleware(
+                        terminal_tools,
+                        empty_retry_tools=empty_retry_tools,
+                    )
+                ]
                 if terminal_tools
                 else None
             ),
@@ -128,7 +134,14 @@ def build_agent_bundle(
             "data_agent",
             DATA_SYSTEM_PROMPT,
             data_toolkit,
-            terminal_tools=frozenset({"erpnext_get_count", "erpnext_get_list"}),
+            terminal_tools=frozenset(
+                {
+                    "erpnext_get_count",
+                    "erpnext_get_list",
+                    "erpnext_get_item_group_low_stock",
+                }
+            ),
+            empty_retry_tools=frozenset({"erpnext_get_list"}),
         ),
         action_agent=make("action_agent", ACTION_SYSTEM_PROMPT, action_toolkit),
         patrol_agent=make("patrol_agent", PATROL_SYSTEM_PROMPT, patrol_toolkit),

@@ -3,9 +3,13 @@
 Some models loop the identical read tool call until the ReAct budget is exhausted and
 then finish with no user-facing text. AgentScope 2.0.5 has no built-in repeated-call
 detection. :class:`LoopGuardTool` decorates a single read-only tool and, after the same
-(name, arguments) pair has already been forwarded ``max_repeats - 1`` times, stops
-forwarding and returns a firm error chunk that instructs the model to answer from the
-data it already has or to change its arguments.
+(name, arguments) pair has already been executed successfully ``max_repeats - 1``
+times, stops forwarding and returns a firm error chunk that instructs the model to
+answer from the data it already has or to change its arguments.
+
+Calls that did not return a successful result do not consume the allowance — an
+argument-validation or transport error must stay fixable, otherwise a model would be
+pushed toward answering from results it never actually received.
 
 The wrapper is applied per request at toolkit assembly time, so its history never spans
 requests, and it only ever decorates read-only tools (write tools are refused).
@@ -62,10 +66,15 @@ class LoopGuardTool(ToolBase):
         signature = self._canonicalize(kwargs)
         if self._seen.count(signature) >= self._max_repeats - 1:
             return self._repeated_chunk()
+        # Record before the call so concurrent duplicates are still deduplicated,
+        # then release the slot when the call did not succeed: failed attempts
+        # (invalid arguments, transport errors) must not consume the allowance.
         self._seen.append(signature)
         result = await self._tool.call(**kwargs)
         # Read-only ERPNext MCP tools return a single ToolChunk; pass through any
         # other shape unchanged to stay compatible with the ToolBase contract.
+        if not (isinstance(result, ToolChunk) and result.state == ToolResultState.SUCCESS):
+            self._seen.remove(signature)
         return result  # type: ignore[return-value]
 
     @staticmethod
@@ -78,9 +87,10 @@ class LoopGuardTool(ToolBase):
             "error": {
                 "code": REPEATED_TOOL_CALL,
                 "message": (
-                    "同一参数的工具调用已经返回过有效结果，禁止再次调用任何工具。"
-                    "现在必须直接根据已有结果输出简洁中文答案；如果 rows 为空，"
-                    "就明确回答没有记录。Do not call another tool. Answer the user now."
+                    "相同参数的调用刚刚已经执行过，禁止以完全相同的参数再次调用。"
+                    "如果已有结果足以回答，请直接基于已有结果输出简洁中文答案；"
+                    "如果结果为空或不符合预期，请更换过滤条件（例如改用 like 模糊匹配名称）"
+                    "或改用更合适的领域工具后再查询。Do not repeat this exact call."
                 ),
             },
         }

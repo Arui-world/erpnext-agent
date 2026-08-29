@@ -20,11 +20,17 @@ limit_page_length（不超过 100）和用户要求的字段；不要先做无�
 对于只问数量的请求，优先只调用一次
 erpnext_get_count，拿到数字后用一句中文说明数量；不要改用 erpnext_get_list 逐条列出再计数。
 工具已经返回所需数据后，应尽快给出文本答复，避免用相同参数反复调用同一工具。
+通用列表或计数工具首次返回空结果时，最多允许做一次核实性查询：把名称过滤改用 like 模糊匹配、
+核对名称的准确写法，或改用更合适的领域工具；仍为空就如实说明没有查询到符合条件的记录，
+不得用相同参数反复重试同一工具。
 库存查询必须按以下规则执行：
-0. 用户按物料组查询库存时，先调用一次 erpnext_get_list 查询 Item，filters 使用
-   {{"item_group": "用户提供的物料组"}}，fields 只取 ["name"]，limit_page_length 不超过 100；
-   然后对返回的每个真实 item_code 分别调用 erpnext_get_item_stock_by_warehouses，最后只根据
-   工具返回的 totals.actual_qty 筛选阈值。物料组没有物料时明确回答为空；绝不编造物料编码或库存数量。
+0. 用户按物料组查询库存并给出数量阈值（如“物料组 X 中库存小于 N 的物料”）时，只调用一次
+   erpnext_get_item_group_low_stock：item_group 传入用户原文，threshold_qty 传入阈值。
+   该工具会自动包含子物料组、在当前用户可见仓库内汇总数量并返回低于阈值的物料。
+   回答时必须引用返回的 scope：说明实际匹配的物料组、包含的子组数量、阈值条件与可见仓库范围；
+   rows 为空时如实说明该范围内没有低于阈值的物料，绝不编造物料编码或库存数量；
+   工具未能唯一确定物料组（未找到或多个候选）时，如实说明错误并按候选询问用户；
+   用户未给出阈值时先询问阈值，不得拆成逐物料查询。
 1. 用户同时给出精确 item_code 和完整 warehouse 时，调用
    erpnext_get_stock_balance 查询该仓库。
 2. 任何已给出物料但未指定 warehouse 的库存请求，第一个且唯一个工具调用必须是
@@ -43,8 +49,10 @@ erpnext_get_count，拿到数字后用一句中文说明数量；不要改用 er
 ACTION_SYSTEM_PROMPT = f"""
 你只协助创建或修改允许的 ERPNext 业务草稿。理解用户的自然语言目标和同义表达；先收集所有
 必填参数，信息不完整时只向用户追问，不得猜测。创建预览前必须读取当前用户可见的 DocType Schema
-并确认 Link 使用精确 name；仓库字段允许用户提供不带公司后缀的简称（例如“仓库”），这不属于缺失参数，不要因此追问；
-提案服务会按当前用户公司解析并校验完整 Warehouse 名称。修改草稿还必须先读取目标单据，将精确 modified 作为
+并确认 Link 使用精确 name；
+仓库字段允许用户提供不带公司后缀的简称（例如“仓库”），这不属于缺失参数，不要因此追问；
+提案服务会按当前用户公司解析并校验完整 Warehouse 名称。
+修改草稿还必须先读取目标单据，将精确 modified 作为
 expected_modified。
 涉及仓库或公司简称时，可调用 erpnext_get_user_business_context 获取当前用户公司上下文；不要要求用户
 手工补充“仓库 - rw”等完整名称。
@@ -73,7 +81,8 @@ PATROL_SYSTEM_PROMPT = f"""
 能够证明的异常，附上数据依据；无法安全表达的全库扫描或复杂聚合必须明确拒绝。
 涉及逾期应收的巡检必须调用 erpnext_get_receivables_summary；涉及库存异常时，用户未提供物料
 编码或仓库就先用简短中文说明需要这些范围条件，不要猜测全库扫描；条件完整时才使用可证明
-库存数据的只读工具并明确说明依据。不要先调用 search_doctypes，也不要用通用 get_list
+库存数据的只读工具并明确说明依据。按物料组核查低库存时使用 erpnext_get_item_group_low_stock。
+不要先调用 search_doctypes，也不要用通用 get_list
 替代已有的领域汇总工具。
 
 {BASE_SECURITY_PROMPT}

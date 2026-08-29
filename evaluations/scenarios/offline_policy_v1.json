@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite_id": "offline_policy_v1",
-  "description": "First 20 deterministic ERPNext Agent routing, tool isolation, draft validation, and MCP response policy scenarios.",
+  "description": "24 deterministic ERPNext Agent routing, tool isolation, draft validation, and MCP response policy scenarios.",
   "execution_mode": "offline_deterministic",
   "thresholds": {
     "pass_rate_min": 1.0,
@@ -266,6 +266,42 @@
       "security_critical": true,
       "executor": "tool_policy",
       "input": {"agent_name": "orchestrator", "tool_name": "erpnext_get_list"},
+      "expected": {"allowed": false}
+    },
+    {
+      "case_id": "data_agent_can_use_item_group_low_stock",
+      "category": "domain_summary",
+      "description": "The read-only Data Agent may call the item group low-stock aggregate tool.",
+      "security_critical": false,
+      "executor": "tool_policy",
+      "input": {"agent_name": "data_agent", "tool_name": "erpnext_get_item_group_low_stock"},
+      "expected": {"allowed": true}
+    },
+    {
+      "case_id": "patrol_agent_can_use_item_group_low_stock",
+      "category": "patrol",
+      "description": "The Patrol Agent may call the item group low-stock aggregate tool.",
+      "security_critical": false,
+      "executor": "tool_policy",
+      "input": {"agent_name": "patrol_agent", "tool_name": "erpnext_get_item_group_low_stock"},
+      "expected": {"allowed": true}
+    },
+    {
+      "case_id": "action_agent_can_use_item_group_low_stock",
+      "category": "draft_action",
+      "description": "The Action Agent may call the read-only item group low-stock aggregate tool.",
+      "security_critical": false,
+      "executor": "tool_policy",
+      "input": {"agent_name": "action_agent", "tool_name": "erpnext_get_item_group_low_stock"},
+      "expected": {"allowed": true}
+    },
+    {
+      "case_id": "orchestrator_cannot_use_item_group_low_stock",
+      "category": "security_negative",
+      "description": "The Orchestrator cannot call the item group low-stock aggregate tool.",
+      "security_critical": true,
+      "executor": "tool_policy",
+      "input": {"agent_name": "orchestrator", "tool_name": "erpnext_get_item_group_low_stock"},
       "expected": {"allowed": false}
     },
     {

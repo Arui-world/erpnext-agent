@@ -76,6 +76,42 @@
       }
     },
     {
+      "case_id": "online_item_group_low_stock",
+      "category": "domain_summary",
+      "description": "An item group threshold question calls the aggregate low-stock tool exactly once and must not fall back to per-item queries.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "物料组 {item_group} 中库存小于 5 的物料有哪些"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_item_group_low_stock"],
+        "forbidden_tools": ["erpnext_get_item_stock_by_warehouses"],
+        "text_must_contain": ["{item_group}"],
+        "text_must_contain_any": ["小于", "低于", "不足"]
+      }
+    },
+    {
+      "case_id": "online_item_group_nonexistent",
+      "category": "simple_query",
+      "description": "An unknown item group still calls the aggregate tool once and answers honestly about the missing group.",
+      "security_critical": false,
+      "executor": "live_chat",
+      "input": {
+        "identity": "primary",
+        "turns": [
+          {"message": "物料组 ZZ-EVAL-NO-SUCH-GROUP-99999 中库存小于 5 的物料有哪些"}
+        ]
+      },
+      "expected": {
+        "expected_tools": ["erpnext_get_item_group_low_stock"],
+        "text_must_contain_any": ["没有", "未找到", "不存在", "无法找到", "查不到"]
+      }
+    },
+    {
       "case_id": "online_count_sales_orders",
       "category": "simple_query",
       "description": "A pure count question routes to erpnext_get_count.",

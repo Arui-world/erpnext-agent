@@ -22,14 +22,14 @@ SUITE_PATH = PROJECT_ROOT / "evaluations/scenarios/offline_policy_v1.json"
 ONLINE_SUITE_PATH = PROJECT_ROOT / "evaluations/scenarios/online_authenticated_v1.json"
 
 
-def test_offline_suite_is_versioned_unique_and_has_first_twenty_cases() -> None:
+def test_offline_suite_is_versioned_unique_and_complete() -> None:
     suite = load_suite(SUITE_PATH)
 
     assert suite.schema_version == 1
     assert suite.execution_mode == "offline_deterministic"
-    assert len(suite.cases) == 20
+    assert len(suite.cases) == 24
     assert len({case.case_id for case in suite.cases}) == len(suite.cases)
-    assert sum(case.security_critical for case in suite.cases) == 13
+    assert sum(case.security_critical for case in suite.cases) == 14
     assert {
         category: sum(case.category == category for case in suite.cases)
         for category in {
@@ -42,19 +42,19 @@ def test_offline_suite_is_versioned_unique_and_has_first_twenty_cases() -> None:
         }
     } == {
         "simple_query": 2,
-        "domain_summary": 2,
+        "domain_summary": 3,
         "multi_step": 2,
-        "draft_action": 4,
-        "patrol": 2,
-        "security_negative": 8,
+        "draft_action": 5,
+        "patrol": 3,
+        "security_negative": 9,
     }
 
 
 def test_offline_suite_passes_its_declared_thresholds() -> None:
     report = EvaluationRunner().run(load_suite(SUITE_PATH))
 
-    assert report.summary.total == 20
-    assert report.summary.passed == 20
+    assert report.summary.total == 24
+    assert report.summary.passed == 24
     assert report.summary.failed == 0
     assert report.summary.pass_rate == 1.0
     assert report.summary.security_violations == 0

@@ -26,3 +26,12 @@ def test_item_stock_by_warehouses_is_a_read_tool_for_business_agents() -> None:
         assert_tool_allowed(agent_name, tool)
     with pytest.raises(ToolPolicyError):
         assert_tool_allowed("orchestrator", tool)
+
+
+def test_item_group_low_stock_is_a_read_tool_for_business_agents() -> None:
+    tool = "erpnext_get_item_group_low_stock"
+    assert tool in READ_TOOLS
+    for agent_name in ("data_agent", "patrol_agent", "action_agent"):
+        assert_tool_allowed(agent_name, tool)
+    with pytest.raises(ToolPolicyError):
+        assert_tool_allowed("orchestrator", tool)
