@@ -24,6 +24,18 @@ def test_data_agent_must_use_analytics_for_percentages() -> None:
     assert "不得自行心算百分比" in DATA_SYSTEM_PROMPT
 
 
+def test_relative_time_zero_base_and_follow_up_rules() -> None:
+    # Prompt lines wrap mid-phrase, so assert contiguous fragments only.
+    assert "运行时日期" in DATA_SYSTEM_PROMPT
+    assert "不得凭记忆猜测当前日期" in DATA_SYSTEM_PROMPT
+    assert "基期或分母为 0" in DATA_SYSTEM_PROMPT
+    assert "运行时日期" in PATROL_SYSTEM_PROMPT
+    assert "基期或分母为 0" in PATROL_SYSTEM_PROMPT
+    assert "至多一个具体、可直接追问的后续巡检问题" in PATROL_SYSTEM_PROMPT
+    assert "运行时日期" in ACTION_SYSTEM_PROMPT
+    assert "不得猜测" in ACTION_SYSTEM_PROMPT
+
+
 def test_data_agent_uses_item_group_aggregate_tool() -> None:
     assert "erpnext_get_item_group_low_stock" in DATA_SYSTEM_PROMPT
     assert "只调用一次" in DATA_SYSTEM_PROMPT
@@ -43,6 +55,13 @@ def test_data_agent_gets_one_corrective_retry_on_empty_lists() -> None:
 
 def test_patrol_agent_knows_item_group_aggregate_tool() -> None:
     assert "erpnext_get_item_group_low_stock" in PATROL_SYSTEM_PROMPT
+
+
+def test_base_rule_forbids_inference_from_date_context() -> None:
+    # The hallucination guard: date context converts periods, never data.
+    for prompt in (DATA_SYSTEM_PROMPT, PATROL_SYSTEM_PROMPT, ACTION_SYSTEM_PROMPT):
+        assert "运行时日期上下文只用于时间区间换算" in prompt
+        assert "不得从日期上下文、摘要或模型记忆推断" in prompt
 
 
 def test_data_agent_uses_aggregate_tool_when_warehouse_is_missing() -> None:

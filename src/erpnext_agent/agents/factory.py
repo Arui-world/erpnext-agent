@@ -17,6 +17,7 @@ from erpnext_agent.agents.prompts import (
     PATROL_SYSTEM_PROMPT,
     SUMMARY_SYSTEM_PROMPT,
 )
+from erpnext_agent.agents.time_context import format_business_date_context
 from erpnext_agent.config import Settings
 
 
@@ -60,6 +61,11 @@ class ConfiguredAgentFactory:
             patrol_toolkit=patrol_toolkit,
             max_retries=self._settings.model_max_retries,
             patrol_max_iterations=self._settings.patrol_max_iterations,
+            # Computed per request: business agents must resolve 本月/上月/
+            # 本季度 against the server clock instead of model memory. It lives
+            # in the system prompt because an extra leading conversation message
+            # measurably made the model answer counts without calling any tool.
+            date_context=format_business_date_context(),
         )
 
     def build_model_chat_agent(self) -> Agent:
@@ -96,11 +102,14 @@ def build_agent_bundle(
     patrol_toolkit: Toolkit,
     max_retries: int = 1,
     patrol_max_iterations: int = 8,
+    date_context: str | None = None,
 ) -> AgentBundle:
     """Construct AgentScope 2.0.5 agents from already policy-filtered toolkits.
 
     Model-provider construction and the custom ToolBase bridge are deliberately separate;
-    neither tokens nor MCP clients belong in serializable agent state.
+    neither tokens nor MCP clients belong in serializable agent state. ``date_context``
+    is appended to the business agents' system prompts so relative time resolves
+    against the server clock; the tool-free orchestrator never needs it.
     """
 
     def make(
@@ -111,10 +120,15 @@ def build_agent_bundle(
         terminal_tools: frozenset[str] = frozenset(),
         empty_retry_tools: frozenset[str] = frozenset(),
         max_iters: int = 8,
+        with_date: bool = False,
     ) -> Agent:
+        system_prompt = prompt
+        if with_date and date_context:
+            header = "运行时日期上下文（服务器时钟，仅供期间换算）："
+            system_prompt = f"{prompt}\n\n{header}\n{date_context}"
         return Agent(
             name=name,
-            system_prompt=prompt,
+            system_prompt=system_prompt,
             model=model,
             toolkit=toolkit,
             middlewares=(
@@ -145,12 +159,19 @@ def build_agent_bundle(
                 }
             ),
             empty_retry_tools=frozenset({"erpnext_get_list"}),
+            with_date=True,
         ),
-        action_agent=make("action_agent", ACTION_SYSTEM_PROMPT, action_toolkit),
+        action_agent=make(
+            "action_agent",
+            ACTION_SYSTEM_PROMPT,
+            action_toolkit,
+            with_date=True,
+        ),
         patrol_agent=make(
             "patrol_agent",
             PATROL_SYSTEM_PROMPT,
             patrol_toolkit,
             max_iters=patrol_max_iterations,
+            with_date=True,
         ),
     )

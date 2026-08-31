@@ -3,15 +3,19 @@ import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from agentscope.event import ReplyEndEvent, TextBlockDeltaEvent
-from agentscope.message import TextBlock, UserMsg
+from agentscope.event import ReplyEndEvent, TextBlockDeltaEvent, ToolCallStartEvent
+from agentscope.message import AssistantMsg, TextBlock, ToolResultBlock, UserMsg
 
 from erpnext_agent.actions.models import ActionRecord, ActionStatus
 from erpnext_agent.actions.proposal import action_summary_markdown
+from erpnext_agent.agents.orchestrator import Intent, RouteDecision
 from erpnext_agent.agents.replies import assistant_text
 from erpnext_agent.api.chat import (
     EMPTY_REPLY_FALLBACK,
     TURN_TIMEOUT_FALLBACK,
+    UNROUNDED_REPLY_WARNING,
+    _context_has_tool_result,
+    _fixed_policy_response,
     _reply_events,
     _sse,
 )
@@ -204,3 +208,106 @@ async def test_stream_timeout_persistence_failure_does_not_mask_timeout() -> Non
             {"code": "AGENT_TURN_TIMEOUT", "message": "Agent turn timed out"},
         )
     ]
+
+
+def test_clarify_fixed_response_mentions_analysis_routes() -> None:
+    decision = RouteDecision(intent=Intent.CLARIFY, target_agent=None, reason="incomplete")
+    response = _fixed_policy_response(decision, "conversation-1")
+    assert response is not None
+    assert "业绩/巡检分析" in response.message
+
+
+async def _drain(agent: object, **kwargs: object) -> tuple[list[str], list[str]]:
+    persisted: list[str] = []
+
+    async def persist(content: str) -> None:
+        persisted.append(content)
+
+    events = [
+        event
+        async for event in _reply_events(  # type: ignore[arg-type]
+            agent,
+            "本月销售订单数量环比上个月怎么样",
+            on_complete=persist,
+            **kwargs,  # type: ignore[arg-type]
+        )
+    ]
+    return events, persisted
+
+
+def _text_agent(events_before_text: list[object] | None = None) -> object:
+    class Agent:
+        name = "data_agent"
+
+        async def reply_stream(self, _message: object):
+            for extra in events_before_text or []:
+                yield extra
+            yield TextBlockDeltaEvent(reply_id="reply-1", block_id="text-1", delta="共 409 张。")
+            yield ReplyEndEvent(session_id="session-1", reply_id="reply-1")
+
+    return Agent()
+
+
+def _clarify_agent() -> object:
+    class Agent:
+        name = "patrol_agent"
+
+        async def reply_stream(self, _message: object):
+            yield TextBlockDeltaEvent(
+                reply_id="reply-1", block_id="text-1", delta="请问低库存的阈值是多少？"
+            )
+            yield ReplyEndEvent(session_id="session-1", reply_id="reply-1")
+
+    return Agent()
+
+
+async def test_stream_numeric_answer_without_any_tool_call_is_flagged() -> None:
+    events, persisted = await _drain(_text_agent(), require_grounding=True)
+    assert any("未经查询验证" in event for event in events)
+    assert persisted and UNROUNDED_REPLY_WARNING in persisted[-1]
+    assert "共 409 张。" in persisted[-1]  # original text kept, warning appended
+
+
+async def test_stream_numeric_answer_with_tool_call_is_not_flagged() -> None:
+    call = ToolCallStartEvent(
+        reply_id="reply-1",
+        tool_call_id="call-1",
+        tool_call_name="erpnext_get_count",
+    )
+    events, persisted = await _drain(_text_agent([call]), require_grounding=True)
+    assert not any("未经查询验证" in event for event in events)
+    assert persisted == ["共 409 张。"]
+
+
+async def test_stream_numeric_answer_without_grounding_requirement_is_untouched() -> None:
+    events, persisted = await _drain(_text_agent())
+    assert not any("未经查询验证" in event for event in events)
+    assert persisted == ["共 409 张。"]
+
+
+async def test_stream_digit_free_clarification_is_not_flagged() -> None:
+    events, persisted = await _drain(_clarify_agent(), require_grounding=True)
+    assert not any("未经查询验证" in event for event in events)
+    assert persisted == ["请问低库存的阈值是多少？"]
+
+
+def test_context_has_tool_result_scans_agent_state() -> None:
+    grounded = SimpleNamespace(
+        state=SimpleNamespace(
+            context=[
+                AssistantMsg(
+                    name="data_agent",
+                    content=[
+                        ToolResultBlock(
+                            id="call-1",
+                            name="erpnext_get_count",
+                            output=[TextBlock(text='{"ok":true}')],
+                        )
+                    ],
+                )
+            ]
+        )
+    )
+    ungrounded = SimpleNamespace(state=SimpleNamespace(context=[]))
+    assert _context_has_tool_result(grounded) is True  # type: ignore[arg-type]
+    assert _context_has_tool_result(ungrounded) is False  # type: ignore[arg-type]

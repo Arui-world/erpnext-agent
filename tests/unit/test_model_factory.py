@@ -174,6 +174,29 @@ def test_patrol_budget_defaults_and_configured_override(
     assert bundle.action_agent.react_config.max_iters == 8
 
 
+def test_business_agents_receive_system_prompt_date_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = settings_from_environment(
+        monkeypatch,
+        MODEL_PROVIDER="openai",
+        MODEL_NAME="openai-model",
+        MODEL_API_KEY="test-api-key",
+    )
+    bundle = ConfiguredAgentFactory(settings).build(
+        orchestrator_toolkit=Toolkit(),
+        data_toolkit=Toolkit(),
+        action_toolkit=Toolkit(),
+        patrol_toolkit=Toolkit(),
+    )
+    for agent in (bundle.data_agent, bundle.action_agent, bundle.patrol_agent):
+        # AgentScope stores the prompt privately; assert on the composed value.
+        assert "运行时日期上下文（服务器时钟" in agent._system_prompt
+        assert "今天是" in agent._system_prompt
+    # The tool-free orchestrator must not carry ERP runtime context.
+    assert "运行时日期上下文（服务器时钟" not in bundle.orchestrator._system_prompt
+
+
 def test_patrol_timeout_below_base_fails_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

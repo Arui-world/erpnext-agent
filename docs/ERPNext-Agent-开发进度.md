@@ -1,10 +1,28 @@
 # ERPNext Agent 开发进度
 
-> 最后更新：2026-08-28
-> 当前阶段：自主分析型 Patrol 与翻译组名解析完成，在线评估 26/26
+> 最后更新：2026-08-29
+> 当前阶段：Patrol 自然语言时间体验与防幻觉加固完成，在线评估三轮 26/26
 > 进度记录原则：每次开发任务完成后更新本文，记录实际完成内容、验证证据、遗留项和下一步。
 
 ## 一、当前状态
+
+### 2026-08-29 运行时日期上下文与未取证数字护栏
+
+Patrol 自主分析的体验底座与可信度护栏（详见 2026-08-28-Patrol自然语言时间体验与防幻觉加固记录.md）：
+
+- 新增 `agents/time_context.py` 纯事实日期块（今天+星期、本周/最近7天/本月/上月/本季度/
+  年初至今 ISO 区间），由 `ConfiguredAgentFactory.build` 每请求计算并追加到 data/action/patrol
+  三个业务 Agent 的**系统提示词**尾部（orchestrator 与 model 模式不注入）。实测教训：最初以
+  领先会话消息注入时，count 类查询 5 轮中 4 轮被模型跳过工具直接作答；移入系统提示词后消除。
+- DATA/PATROL/ACTION 提示词新增相对时间条款（以日期上下文换算并在回答写明实际区间；ACTION
+  的相对日期换算后需在预览注明依据）；CLARIFY 固定文案扩展为查询/业绩巡检分析/草稿三路由。
+- 未取证数字护栏（fail-closed）：回合内零工具活动（流式无 `ToolCallStartEvent`、非流式
+  context 无 `tool_result` 块）且回复含数字时，流式追加显著警告并随历史持久化。动因：探针
+  发现 patrol 曾一次编造"409/357 单、-12.71%"且自称"经 erpnext_analytics 计算"；DashScope
+  兼容模式把 `tool_choice=required` 降级为 auto，API 层无法强制取数，故采用提示词+护栏双层。
+- 已执行验证：新增 time_context 4 项、工厂系统提示词装配、护栏流式 4 项+非流式扫描、CLARIFY
+  文案等单测；pytest 全量、Ruff、mypy strict 通过；离线 28/28；5 轮定向探针（count/环比/
+  物料组中英文/单物料多仓）每轮 5/5；在线 `EVAL_REPEAT=3` 三轮全部 26/26、安全违规 0、exit 0。
 
 ### 2026-08-28 自主分析型 Patrol 与翻译组名解析
 
@@ -592,6 +610,9 @@ Alembic revision `20260812_0002` 已从带样例数据的 `0001` 临时库和当
 | 在线套件扩展验收 | `online_authenticated_v1` 24/24、pass_rate 1.0、安全违规 0；`online_item_group_low_stock` 单次聚合工具调用且回答引用 scope；既有 22 场景无回归 |
 | 翻译组名解析 | MCP 全量测试新增 3 项（Translation 命中/多候选歧义/幽灵源名失败关闭）；活体复现 `原材料/15` → `Raw Material`（translated）、返回 `test item1 10.0` |
 | Patrol 自主分析 | 在线 `online_analysis_period_change`：路由 patrol_agent，count×2+`erpnext_analytics` 后给出带表结论，零基如实说明；`online_patrol_inventory_anomaly` 范围不足先追问；analytics 策略离线 3 项（data/patrol 允许、orchestrator 拒绝） |
+| 日期上下文形态实验 | 领先会话消息注入：5 轮定向探针中 4 轮 count 查询被跳过工具直接作答；移入系统提示词后 5/5×5 轮全通过（count、环比、物料组、翻译名、单物料多仓） |
+| 未取证数字护栏 | 流式零 ToolCallStart 且含数字 → 追加警告并持久化（单测 4 项：告警/已取证/非业务模式/无数字澄清）；非流式 context `tool_result` 扫描；动因探针实测 patrol 一次编造 409/357/−12.71% |
+| 在线三轮稳定性 | `EVAL_REPEAT=3` 三轮全部 26/26、安全违规 0、threshold_passed、exit 0；此前同会话护栏前两度复现的草稿执行 409 在最终三轮未再出现 |
 | 套件最终回归（本轮后） | 离线 28/28、在线 26/26、pass_rate 1.0、安全违规 0；`online_natural_sales_overview` 仍路由 data_agent；pytest 全量 + Ruff + mypy strict 通过 |
 | 在线验收（--repeat 3） | 两用户真实登录后取得三轮全部 20/20、通过率 100%、安全违规 0、`threshold_passed=true`；三类草稿真实写入并回读 `docstatus=0`，REST 清理全部成功 |
 | 跨用户隔离真实验证 | secondary 对 primary 的 Action decision/execute 均返回 404；低权限库存查询未越权 |
@@ -609,8 +630,9 @@ Alembic revision `20260812_0002` 已从带样例数据的 `0001` 临时库和当
 
 ## 四、尚未完成
 
-- 在线评估的 22 场景已完成一次严格全量验收；仍需在发布前按计划持续执行多轮（例如 `EVAL_REPEAT=3`）
-  以获得统计稳定性证据；
+- 草稿执行接口偶发 409 仍未定位：2026-08-29 稳定性过程中两次复现"decision 已返回 APPROVED、
+  execute 观测到 PENDING"（`Action cannot execute from status PENDING`），最终三轮未再现；
+  疑为 decision/execute 跨请求事务可见性竞态，需专项排查；
 - OpenTelemetry 代码和 OTLP/HTTP exporter 已接入，本地 Collector/Jaeger 已随 Compose 落地，
   但尚未产出持久化面板、采样策略、SLO 和告警证据；
 - 故障恢复类场景（重启、写后超时、幂等重试）仍依赖人工故障演练，未纳入自动在线套件；
@@ -618,7 +640,8 @@ Alembic revision `20260812_0002` 已从带样例数据的 `0001` 临时库和当
 
 ## 五、下一阶段建议
 
-1. 在相同 OAuth fixture 下执行 `EVAL_REPEAT=3 make eval-online`，形成多轮统计稳定性证据；
+1. 专项排查草稿执行 409 的 decision/execute 事务可见性竞态（§四）；多轮稳定性证据已于
+   2026-08-29 以 `EVAL_REPEAT=3` 三轮 26/26 形成，发布前可再叠加；
 2. 为在线套件补充故障恢复类场景或配套人工故障演练记录；
 3. 在预发布环境制定 OTel 采样、SLO 和告警阈值；
 4. 评估 MCP 多仓历史日期与库存价值能力是否进入下一阶段范围。

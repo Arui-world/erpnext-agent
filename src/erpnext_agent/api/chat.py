@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -71,6 +72,25 @@ TURN_TIMEOUT_FALLBACK = (
     "本回合在时间预算内未完成，上述部分查询结果未能整理为最终答复；"
     "请缩小问题范围或稍后重试。"
 )
+UNROUNDED_REPLY_WARNING = (
+    "\n\n⚠ 本回合未获得任何 ERPNext 工具结果，以上包含数字的内容未经查询验证，"
+    "请重试或补充范围条件。"
+)
+_NUMERIC_CLAIM_RE = re.compile(r"\d")
+
+
+def _contains_numeric_claim(text: str) -> bool:
+    return bool(_NUMERIC_CLAIM_RE.search(text))
+
+
+def _context_has_tool_result(agent: Agent) -> bool:
+    for message in getattr(agent.state, "context", []):
+        try:
+            if message.get_content_blocks("tool_result"):
+                return True
+        except (AttributeError, TypeError):
+            continue
+    return False
 
 
 def _turn_timeout_seconds(intent: Intent, settings: Settings) -> float:
@@ -397,6 +417,11 @@ async def chat(
         if not text:
             set_span_result(span, "MODEL_EMPTY_REPLY", error=True)
             raise HTTPException(status_code=502, detail="Model returned no text")
+        if _contains_numeric_claim(text) and not _context_has_tool_result(agent):
+            # Same ungrounded-number guard as the streaming path: the final
+            # reply Msg is text-only even when tools ran, so grounding is
+            # checked against the agent's context, not the reply content.
+            text += UNROUNDED_REPLY_WARNING
         set_span_result(span, "OK")
     action = (
         runtime.action_proposal_tool.record
@@ -472,6 +497,7 @@ async def chat_stream(
             telemetry=telemetry,
             parent_context=telemetry.current_context(),
             timeout_seconds=_turn_timeout_seconds(decision.intent, settings),
+            require_grounding=True,
         ):
             yield event
 
@@ -714,7 +740,7 @@ def _fixed_policy_response(
         return ChatResponse(
             status="clarification_required",
             route=decision.intent.value,
-            message="请说明要查询、巡检，还是创建/修改哪一种 ERPNext 草稿。",
+            message="请说明要查询具体数据、做业绩/巡检分析，还是创建或修改 ERPNext 草稿。",
             conversation_id=conversation_id,
         )
     return None
@@ -759,6 +785,7 @@ async def _persistent_reply_events(
     telemetry: Telemetry | None = None,
     parent_context: Any | None = None,
     timeout_seconds: float | None = None,
+    require_grounding: bool = False,
 ) -> AsyncIterator[str]:
     yield _sse("conversation", {"conversation_id": turn.conversation_id})
 
@@ -786,6 +813,7 @@ async def _persistent_reply_events(
         parent_context=parent_context,
         turn_id=turn.turn_id,
         timeout_seconds=timeout_seconds,
+        require_grounding=require_grounding,
     ):
         yield event
 
@@ -800,6 +828,7 @@ async def _reply_events(
     parent_context: Any | None = None,
     turn_id: str | None = None,
     timeout_seconds: float | None = None,
+    require_grounding: bool = False,
 ) -> AsyncIterator[str]:
     messages: Msg | list[Msg]
     if isinstance(inputs, str):
@@ -807,6 +836,9 @@ async def _reply_events(
     else:
         messages = inputs
     text_chunks: list[str] = []
+    # Any tool activity in the stream grounds the turn; an ungrounded reply
+    # that still contains numbers is a hallucination risk and gets flagged.
+    saw_tool_activity = False
     telemetry = telemetry or Telemetry.disabled()
     attributes: dict[str, str] = {
         "agent_name": str(getattr(agent, "name", "agent")),
@@ -826,6 +858,7 @@ async def _reply_events(
                     text_chunks.append(delta)
                     yield _sse("text_delta", {"delta": delta})
                 elif isinstance(event, ToolCallStartEvent):
+                    saw_tool_activity = True
                     yield _sse(
                         "tool_call_start",
                         {
@@ -849,6 +882,17 @@ async def _reply_events(
                         reply_text = EMPTY_REPLY_FALLBACK
                         text_chunks.append(reply_text)
                         yield _sse("text_delta", {"delta": reply_text})
+                    elif (
+                        require_grounding
+                        and not saw_tool_activity
+                        and _contains_numeric_claim(reply_text)
+                    ):
+                        # The model answered with numbers it never queried.
+                        # Stream the warning so it lands in history too;
+                        # the alternative — silent confident fabrication — is worse.
+                        text_chunks.append(UNROUNDED_REPLY_WARNING)
+                        reply_text = "".join(text_chunks).strip()
+                        yield _sse("text_delta", {"delta": UNROUNDED_REPLY_WARNING})
                     action = (
                         action_proposal_tool.record
                         if action_proposal_tool is not None
