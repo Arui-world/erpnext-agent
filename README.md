@@ -1,288 +1,116 @@
 # ERPNext Agent
 
-这是一个基于 AgentScope、FastAPI、PostgreSQL 和 Redis 的 ERPNext Agent 服务。
-技术基线固定为 Python 3.12、`agentscope==2.0.5`，并通过现有 ERPNext MCP endpoint
-使用当前登录用户权限访问业务数据。
+基于 AgentScope 2.0 的 ERPNext 智能业务 Agent 服务：自然语言完成查询、分析与巡检，所有写操作
+经过持久化人工审批（HITL），并以权限透传、双层评估和可审计的工程基线为设计核心。
 
-## 当前已经实现
+![CI](https://github.com/Arui-world/erpnext-agent/actions/workflows/ci.yml/badge.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Python 3.12](https://img.shields.io/badge/Python-3.12-blue)
+![AgentScope 2.0.6](https://img.shields.io/badge/AgentScope-2.0.6-green)
 
-- FastAPI 应用生命周期、存活/就绪检查和安全响应头；
-- OAuth 2.0 Authorization Code + PKCE 登录入口与回调；
-- OAuth Profile 与 `erpnext_get_current_user` 的身份一致性校验；
-- 加密 OAuth token 持久化，以及 Redis 不透明 Session/一次性 OAuth state；
-- OAuth token 到期前自动刷新、Redis single-flight 与 MCP 401/403 后单次重试；
-- MCP HTTP、JSON-RPC、`isError`、`structuredContent.ok` 四层失败归一化；
-- Data、Action、Patrol、Orchestrator 的代码级工具白名单；
-- AgentScope 2.0.5 Agent/MCP Client 构造边界；
-- 从 `.env` 构造 DashScope、OpenAI 或 OpenAI-compatible 模型的 Model Factory；
-- 使用环境配置和用户专属 Toolkit 创建四类 Agent 的 `ConfiguredAgentFactory`；
-- 保留 MCP `structuredContent` 和原始 `inputSchema` 的自定义 AgentScope `ToolBase`；
-- 每次请求核对 OAuth 用户并创建物理隔离的 Toolkit/Agent；
-- 受 Session/CSRF 保护的真实 Agent 回复与 `reply_stream()` SSE；
-- Codex 风格响应式聊天页面，支持模型对话与 ERPNext Agent 两种模式；
-- PostgreSQL 会话/消息持久化、按用户隔离的历史恢复和服务端多轮上下文；
-- 版本化长对话增量摘要、Redis 摘要锁和失败降级，原始消息保持完整；
-- 历史会话侧栏、会话列表、显式新建与模型/Agent 模式独立会话；
-- 会话重命名、即时软删除、后台保留策略清理和消息级联删除；
-- PostgreSQL HITL Action、服务端草稿预览、本人确认/拒绝、CAS 执行、幂等键与回读验证；
-- Alembic 前向迁移、现有 `create_all()` 数据库安全接管、ORM drift 检查和应用 revision 门禁；
-- 环境变量模板、非 root/只读 Agent 镜像、PostgreSQL + Redis Docker Compose；
-- PKCE、MCP 响应、工具隔离、意图门控、参数哈希和日志脱敏单元测试。
-- 版本化离线策略评估 Runner、首批 20 个场景、分类指标和逐场景证据报告。
-- 可选 OpenTelemetry OTLP/HTTP Trace，覆盖 HTTP、模型、MCP、Action、恢复和保留清理边界。
-- 本地 Compose 可选启动 OpenTelemetry Collector 与 Jaeger，浏览器查看 Trace。
+> 个人独立开发项目，本地部署于真实 ERPNext 实例完成端到端验收；不含任何真实企业数据与凭据。
 
-`POST /api/v1/chat` 已能对查询和巡检请求执行用户专属的模型/工具循环；
-`POST /api/v1/chat/stream` 提供文本、工具状态和待审批 Action SSE。创建或修改草稿时，
-Action Agent 只持有只读 MCP 工具和本地预览工具；ERPNext 写工具仅由批准后的独立执行入口
-使用固定幂等键调用，并在成功后回读确认 `docstatus=0`。
+## 它解决什么问题
 
-## 本地配置
+让 ERPNext 用户用自然语言在**本人权限范围内**查询业务数据、分析异常、创建/修改单据草稿。
+例如："物料组为原材料库存低于 15 的物料"、"本月销售订单环比上个月怎么样"、"逾期应收巡检并
+给出跟进建议"。
 
-要求 Python 3.12 和 [uv](https://docs.astral.sh/uv/)。先生成只用于本机的配置：
+与常见 LLM Demo 的区别：
 
-```bash
-cp .env.example .env
-openssl rand -hex 32
-openssl rand -base64 32 | tr '+/' '-_'
+1. **权限不是提示词请求，是代码边界。** 浏览器只持有 Agent Session Cookie；ERPNext OAuth token
+   信封加密存储、每请求透传到 MCP；Data/Patrol/Action 的工具持有在构造期物理隔离；所有写操作
+   走数据库持久化审批状态机（参数哈希绑定 → 本人确认 → CAS 执行 → 固定幂等键 → `get_doc`
+   回读 `docstatus=0`）。跨用户审批、幂等键注入、提示词诱导写入都有对应的安全负样本测试。
+2. **Agent 质量用数字说话。** 28 项离线确定性策略评估（意图路由/工具隔离/参数校验/响应信封，
+   零外部依赖可复现）+ 26 项在线真实链路评估（真实 OAuth 双用户 + 真实 ERPNext 数据 + 草稿
+   全生命周期含测试数据清理），输出逐场景证据、分类通过率与稳定退出码契约。
+3. **"更像 Agent"是实验出来的，不是喊出来的。** Patrol Agent 按五步方法论自主决定取数计划
+   （界定问题→最小证据集→自适应查询→确定性计算→带证据结论）；环比/占比等百分比一律经本地
+   确定性计算工具，禁止模型心算；实测发现并修复了"日期上下文以会话消息注入导致模型跳过工具
+   直接作答"（5 轮探针 4 次复现）、"空列表被收敛中间件锁死成错误答案"、"UI 翻译物料组名
+   （原材料 ← docname `Raw Material`）解析失败"等真实问题；DashScope 兼容模式将
+   `tool_choice=required` 静默降级为 `auto`，因此未取证数字采用运行时 fail-closed 护栏兜底。
+4. **生产级工程基线，但边界诚实。** Alembic 迁移门禁与 ORM drift 检查、OpenTelemetry 隐私链路
+   （token/Prompt/业务正文永不进 Trace）、Action 重启恢复与会话保留后台 Worker、只读非 root
+   容器镜像——同时明确记录已知限制（见文末）。
+
+## 架构
+
+```mermaid
+flowchart TB
+  B["浏览器 / 聊天工作台"] -->|"Session Cookie + CSRF"| API["FastAPI 接入层<br/>限流 · 64KiB 请求体 · SSE"]
+  API --> RT["意图路由<br/>确定性 IntentGate + LLM 分类器（降级门控）"]
+  RT --> D["Data Agent<br/>只读查询"]
+  RT --> P["Patrol Agent<br/>自主分析 · 12 迭代/150s 预算"]
+  RT --> A["Action Agent<br/>草稿预览 · 不持有写工具"]
+  D --> TK["每请求 Toolkit<br/>工具白名单 + LoopGuard"]
+  P --> TK
+  A --> TK
+  TK --> AD["MCP Adapter<br/>HTTP→JSON-RPC→isError→ok 四层校验"]
+  AD -->|"当前用户 Bearer token"| MCP["erpnext_mcp_tools<br/>Frappe App · 16 工具 · 权限感知聚合"]
+  MCP --> ERP[("ERPNext / Frappe<br/>RBAC · User Permission · permlevel")]
+  A -.->|"PENDING Action"| HITL["审批网关<br/>参数哈希 · TTL · CAS · 幂等 · 回读"]
+  HITL --> AD
+  API --- PG[("PostgreSQL<br/>消息/摘要/Action/加密凭据")]
+  API --- RD[("Redis<br/>Session · single-flight · 限流")]
 ```
 
-把第一条输出填入 `SESSION_SECRET`，第二条输出填入 `TOKEN_ENCRYPTION_KEY`，并修改数据库、
-Redis、OAuth Client 与模型相关占位值。不要提交 `.env`。
+每请求装配（无跨请求共享状态）：解析会话与凭据 → 到期前主动刷新（Redis 分布式租约
+single-flight）→ `tools/list` 契约校验（严格集合相等，fail-closed）→ 按意图物理构建 Toolkit →
+Agent 执行 ReAct 循环 → 助手回复落库。会话记忆为版本化增量摘要（Redis 锁 + 序列号防过时写回），
+原始消息完整保留并支持保留策略清理。
 
-ERPNext 中的 OAuth Client 至少应配置：
+## 评估体系
 
-- Authorization Code、PKCE S256；本地 Frappe 实例当前使用 Client Secret Post；
-- Scope 开发基线为 `all openid`；
-- Redirect URI 精确填写 `http://localhost:8001/api/v1/auth/callback`；
-- Skip Authorization 关闭，并配置明确的业务角色白名单。
+| 套件 | 模式 | 覆盖 | 最近结果（2026-08-29） |
+|---|---|---|---|
+| `offline_policy_v1` | 确定性、零外部依赖 | 意图路由、上下文继承、读写工具隔离、草稿参数校验、MCP 业务信封失败关闭 | 28/28，安全违规 0 |
+| `online_authenticated_v1` | 真实 OAuth 双用户 + 真实 ERPNext | 工具选择正确性、领域聚合、草稿提案→批准→执行→回读→清理、跨用户隔离 404、低权限边界、翻译组名/相对时间 | 26/26 × 3 轮，安全违规 0 |
 
-浏览器 OAuth 跳转使用公开地址 `ERPNEXT_BASE_URL=http://dev.localhost:8000`；Agent 容器通过
-共享 Docker 网络使用 `ERPNEXT_INTERNAL_URL=http://frappe:8000`，MCP 也使用 `frappe:8000`
-服务名。内部请求仍携带公开 Host，确保 Frappe 正确路由到 `dev.localhost` 站点。
+离线套件以退出码契约（0/1/2/3）接入 CI；在线套件缺 fixture 环境变量时失败关闭并列出补救项。
+两类报告强制携带免责声明：离线数字不代表真实模型质量，在线数字仅代表该评估集。
 
-## 启动
+真实输出摘录（在线报告证据字段，dev 演示数据）：
+
+> **环比分析**（`online_analysis_period_change`，patrol 路由，工具序列 `get_count → get_count → erpnext_analytics`）：
+> 本月（2026-08-01 至 2026-08-31）2 单，上月（2026-07-01 至 2026-07-31）0 单——
+> "基期为 0，无法计算有效百分比，仅能确认绝对变化 +2 单"，并给出 1 条后续巡检建议。
+
+> **物料组低库存**（`online_item_group_low_stock`，单次 `erpnext_get_item_group_low_stock`，
+> 无逐物料 N+1）：按 (物料组含全部子组, 当前用户可见叶子仓库, 严格小于阈值) 返回并引用 scope。
+
+## 快速开始
+
+要求：Python 3.12、uv、Docker Compose，以及一个可访问的 ERPNext 实例（MCP 服务端为本仓库的
+姊妹项目 [erpnext_mcp_tools](https://github.com/Arui-world/erpnext_mcp_tools)）。
 
 ```bash
+cp .env.example .env          # 填写模型、ERPNext 与 OAuth Client；密钥生成方式见模板注释
 uv sync --frozen
-uv run pytest
-docker compose --env-file .env config --quiet
-make rebuild
+make rebuild                  # 构建镜像；一次性 migrate Job 成功后 Agent 才启动
+make eval                     # 离线策略评估（无需任何外部服务）
+make eval-online              # 在线真实链路评估（需 EVAL_ONLINE_* fixture 与两个已登录用户）
 ```
 
-首次启动、修改 Python 代码、依赖或 Dockerfile 后使用 `make rebuild`；没有代码变化时使用
-`make up`，它只启动/协调现有容器，不再强制执行镜像构建。Compose 每次启动会先运行一次性
-`migrate` Job；只有迁移成功退出，Agent 才会启动。常用运维命令：
+打开 `http://localhost:8001/` 登录 ERPNext 即可对话；`curl localhost:8001/health/ready`
+查看能力位与迁移 revision。可选 `--profile observability` 启动 OTel Collector + Jaeger。
 
-```bash
-make up       # 日常启动，不强制构建
-make rebuild  # 构建镜像并启动全部服务
-make restart  # 只重启 Agent 容器
-make logs     # 持续查看 Agent 日志
-make ps       # 查看 Compose 服务状态
-make down     # 停止并删除 Compose 容器
-```
+## 已知限制（诚实边界）
 
-数据库迁移也可以独立执行和检查：
+- 单人项目，本地 dev 实例端到端验收，**无真实生产流量与并发验证**；
+- 草稿执行接口存在已记录的偶发 409（decision/execute 跨请求事务可见性竞态，三轮全量评估未
+  复现，见[开发进度](docs/ERPNext-Agent-开发进度.md) §四）；
+- 写能力仅白名单草稿（创建/更新），无 submit/cancel/delete——这是设计决定而非疏漏；
+- 长期记忆（ReMe 工具轨迹经验层）已完成方案评估但**未实现**；
+- 单实例部署假设；多副本需要解决本地文件与会话粘性。
 
-```bash
-docker compose run --rm migrate
-docker compose run --rm migrate python -m erpnext_agent.migrate check
-docker compose run --rm migrate python -m erpnext_agent.migrate current
-```
+## 技术栈
 
-首次 Alembic revision 支持接管早期由 SQLAlchemy `create_all()` 创建的完整结构：接管前逐表
-校验列、主键、关键唯一约束和会话外键。部分或不兼容结构会失败关闭；历史
-`oauth_credentials` 表被明确视为非托管表，不会删除或修改。迁移采用 PostgreSQL advisory lock
-防止多个部署实例并发升级。应用启动时必须读到预期 revision，否则直接拒绝启动。
-第二个 revision 为会话增加持久化标题和软删除时间，验证既有数据可以继续做版本化升级。
+[AgentScope 2.0](https://github.com/agentscope-ai/agentscope) · FastAPI · PostgreSQL · Redis ·
+[Model Context Protocol](https://modelcontextprotocol.io/) · Frappe/ERPNext · SQLAlchemy/Alembic ·
+OpenTelemetry · Docker Compose · Pytest/Ruff/Mypy
 
-验证：
+## License
 
-```bash
-curl http://localhost:8001/health/live
-curl http://localhost:8001/health/ready
-```
-
-浏览器访问：
-
-```text
-http://localhost:8001/
-```
-
-页面采用左侧助手气泡、右侧用户气泡，并实时显示文本增量和工具调用状态。首次打开时点击
-“登录 ERPNext”完成 OAuth 登录：
-
-- `模型对话`：默认模式，不调用 ERPNext 工具，用于测试模型连接和多轮上下文；
-- `ERPNext Agent`：使用当前登录用户权限执行查询、只读巡检和经人工批准的草稿创建/修改。
-
-两种模式分别维护独立 `conversation_id`。浏览器只提交当前消息与会话 ID；历史消息从
-PostgreSQL 加载，并在流式回复完成前落库。刷新页面后，页面先读取会话列表，再恢复该模式
-最近或已选中的会话。左侧历史栏支持切换已有会话和显式创建空白新会话。
-每条会话还可以重命名或删除。删除后立即从当前用户视图隐藏；聊天内容在默认 7 天宽限期后
-物理清理，关联 Action 审批/执行记录作为独立审计数据保留。
-
-登录入口是：
-
-```text
-GET http://localhost:8001/api/v1/auth/login
-```
-
-登录完成后，浏览器只持有 HttpOnly Session Cookie。客户端通过
-`GET /api/v1/auth/session` 取得 CSRF token，并在聊天、审批、退出等状态变更请求中发送
-`X-CSRF-Token`。
-
-## 核心环境变量
-
-| 分组 | 变量 | 说明 |
-|---|---|---|
-| 基础设施 | `DATABASE_URL`, `REDIS_URL` | Alembic/Action/token/聊天记录与 Session/state 存储 |
-| ERPNext | `ERPNEXT_BASE_URL`, `ERPNEXT_INTERNAL_URL`, `ERPNEXT_MCP_URL`, `ERPNEXT_SITE` | 浏览器地址、容器内地址与 MCP endpoint |
-| OAuth | `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URI`, `OAUTH_REFRESH_*` | 每环境独立 OAuth Client 与刷新策略 |
-| 会话 | `SESSION_SECRET`, `SESSION_COOKIE_*`, `SESSION_TTL_SECONDS` | Agent 浏览器会话 |
-| 加密 | `TOKEN_ENCRYPTION_KEY`, `TOKEN_ENCRYPTION_KEY_VERSION` | OAuth token 信封加密入口 |
-| Action | `ACTION_TTL_SECONDS`, `ACTION_RECOVERY_*`, `ACTION_EXECUTION_LOCK_TTL_SECONDS`, `ACTION_HISTORY_LIMIT` | 审批期限、后台恢复、执行互斥与会话卡片恢复数量 |
-| 模型 | `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_API_KEY`, `MODEL_BASE_URL`, `MODEL_ENABLE_THINKING`, `INTENT_CLASSIFIER_TIMEOUT_SECONDS`, `AGENT_TURN_TIMEOUT_SECONDS` | AgentScope Model Factory、千问思考模式和意图/单轮超时 |
-| 请求保护 | `REQUEST_BODY_MAX_BYTES`, `RATE_LIMIT_*` | 请求体大小、聊天/审批/认证接口固定窗口限流 |
-| MCP/循环 | `MCP_LOOP_GUARD_MAX_REPEATS` | 相同只读工具调用的请求级循环保护 |
-| 记忆 | `CHAT_HISTORY_*`, `CHAT_SUMMARY_*`, `CHAT_RETENTION_*` | 模型上下文、页面历史、自动摘要与保留清理策略 |
-| 观测 | `OTEL_ENABLED`, `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORT_TIMEOUT_SECONDS` | 可选 OTLP/HTTP Trace 导出 |
-
-完整默认值与说明见 [`.env.example`](.env.example)。生产环境必须使用 HTTPS、Secure Cookie 和
-外部 Secret 管理器。`AUTO_CREATE_SCHEMA` 已移除，所有环境统一通过 Alembic `migrate` Job 管理
-结构；迁移文件不保存数据库 URL 或密码。
-
-OpenTelemetry 默认关闭。启用时，`OTEL_EXPORTER_OTLP_ENDPOINT` 必须填写 OTLP/HTTP 的完整
-Trace 地址（通常以 `/v1/traces` 结尾）；容器访问宿主机 Collector 时应使用
-`host.docker.internal`，或直接填写同一 Docker 网络中的 Collector 服务名。`/health/ready`
-通过 `otel_tracing` 仅报告是否启用，不把 Collector 暂时不可用升级为业务不可用。Exporter
-采用后台批量发送；导出失败不会中断聊天、MCP 或 Action 执行。
-
-Trace 只记录固定的技术字段，例如 `request_id`、HMAC 后的 `session_id`、`turn_id`、
-`agent_name`、`model_call_id`、`tool_name`、`json_rpc_id`、`mcp_trace_id`、`action_id`、
-`duration_ms`、`retry_count` 和 `result_code`。不会记录 OAuth token、Cookie、Client Secret、
-完整 Prompt、工具参数、业务响应或异常正文。MCP HTTP 请求会注入 W3C `traceparent`，便于
-与支持 Trace Context 的 ERPNext MCP 服务关联。
-
-## API 骨架
-
-| 路径 | 状态 |
-|---|---|
-| `GET /health/live`, `GET /health/ready` | 可用 |
-| `GET /api/v1/auth/login`, `GET /api/v1/auth/callback` | 已接线并通过真实 ERPNext OAuth/MCP 身份验证 |
-| `GET /api/v1/auth/session`, `POST /api/v1/auth/logout` | 可用 |
-| `POST /api/v1/chat` | Data/Patrol 查询及 Action 草稿预览运行时 |
-| `POST /api/v1/chat/stream` | 已接入 AgentScope 流式 SSE |
-| `POST /api/v1/chat/model/stream` | 已接入 PostgreSQL 历史驱动的无工具模型多轮 SSE |
-| `GET /api/v1/chat/history` | 按当前用户、站点和模式恢复持久化消息 |
-| `GET /api/v1/chat/conversations` | 返回当前用户指定模式的历史会话列表 |
-| `POST /api/v1/chat/conversations` | 创建独立新会话，要求 Session 与 CSRF |
-| `PATCH /api/v1/chat/conversations/{id}` | 重命名本人指定模式的会话，要求 CSRF |
-| `DELETE /api/v1/chat/conversations/{id}` | 软删除本人指定模式的会话，要求 CSRF |
-| `GET /`、`GET /assets/*` | 聊天页面与静态资源 |
-| `GET /api/v1/approvals/{id}` | 已实现本人可见约束 |
-| `GET /api/v1/approvals?conversation_id={id}` | 恢复当前用户、站点和会话的审批卡片及最新状态 |
-| `POST /api/v1/approvals/{id}/decision` | 已实现本人确认/拒绝与状态锁 |
-| `POST /api/v1/approvals/{id}/execute` | 已接入本人批准、CAS、分布式执行锁、固定幂等键和草稿回读 |
-
-服务启动后会按 `ACTION_RECOVERY_*` 扫描遗留的 `EXECUTING` Action。恢复任务通过
-Action 级 Redis 锁与冷却窗口避免跨实例并发重放，重新加载 Action 所有者的加密 OAuth 凭据、
-核验 MCP 当前用户后，才使用原参数和原 `idempotency_key` 核对/重试。身份或凭据无法确认时
-Action 保持 `EXECUTING` 并记录诊断信息，等待重新登录或人工重试，不会生成新幂等键。
-Agent 对话历史加载时会同时读取该会话的 Action 记录，把审批卡片重新挂载到包含对应 Action ID
-的助手消息；若流式连接在助手消息落库前中断，则追加一张本地恢复卡片。页面会短轮询仍处于
-`EXECUTING` 的记录，直到恢复 Worker 写入终态。
-
-会话保留 Worker 默认每小时执行有界批量清理：180 天无活动的会话、24 小时无消息的空会话，
-以及软删除满 7 天的会话会被物理删除，`chat_messages` 通过数据库外键级联清理。多实例使用
-`FOR UPDATE SKIP LOCKED` 避免重复处理；可以用 `.env.example` 中的 `CHAT_RETENTION_*` 调整或
-关闭 Worker。此策略只管理聊天内容，不删除 Action 审计记录。
-
-首批离线确定性评估不调用模型、ERPNext、Redis 或 PostgreSQL：
-
-```bash
-docker compose run --rm --no-deps agent \
-  python -m erpnext_agent.evaluation.runner
-```
-
-场景源文件位于 `evaluations/scenarios/offline_policy_v1.json`，当前覆盖 20 个路由、上下文继承、
-工具隔离、三类草稿参数和 MCP 响应失败关闭场景。Runner 输出 JSON，阈值通过返回 0、场景执行
-但未达阈值返回 1、场景文件无效返回 2。本指标只证明确定性策略，不代表真实模型准确率、ERPNext
-数据准确率、双用户权限差分或端到端延迟；这些必须由后续在线评估单独报告。
-
-模型配置示例：
-
-```dotenv
-# DashScope
-MODEL_PROVIDER=dashscope
-MODEL_NAME=qwen-plus
-MODEL_API_KEY=replace-with-real-key
-MODEL_BASE_URL=
-
-# 或 OpenAI-compatible 服务
-MODEL_PROVIDER=openai_compatible
-MODEL_NAME=replace-with-model-name
-MODEL_API_KEY=replace-with-real-key
-MODEL_BASE_URL=https://model-service.example/v1
-MODEL_ENABLE_THINKING=false
-```
-
-`MODEL_PROVIDER=openai` 使用 AgentScope 官方 `OpenAIChatModel` 默认地址；
-`openai_compatible` 必须明确配置 `MODEL_BASE_URL`。服务的 `/health/ready` 会返回不包含密钥的
-`model_configured` 状态。模型内部重试关闭，统一由 `MODEL_MAX_RETRIES` 配置 Agent 层重试，
-避免两层重试叠加。
-
-使用 Qwen 3.x 等混合思考模型时，`MODEL_ENABLE_THINKING=false` 可避免思考模式与工具强制选择
-不兼容；MCP 工具桥仍会对模型偶发编码成字符串的 `fields/filters` 参数进行严格 JSON 解码和
-原始 Schema 校验。
-
-### 本地启用 OpenTelemetry
-
-项目的 Compose 文件包含本地 `otel-collector` 和 `jaeger` 服务。将 `.env` 中的配置改为：
-
-```dotenv
-OTEL_ENABLED=true
-OTEL_SERVICE_NAME=erpnext-agent
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
-OTEL_EXPORT_TIMEOUT_SECONDS=5
-```
-
-然后执行：
-
-```bash
-docker compose --env-file .env up -d
-curl http://localhost:8001/health/ready
-```
-
-确认返回 `"otel_tracing": true` 后，访问页面或调用接口产生请求，再打开
-`http://localhost:16686`，在 Jaeger 的 Service 下选择 `erpnext-agent` 查看 Trace。
-Collector 只负责接收和转发，Jaeger 是本地开发查看端；两者均使用内存存储，重启后历史
-Trace 会清空。生产环境应替换为固定版本镜像和持久化 Trace 后端。
-
-仅验证模型连通性（会实际请求模型服务并产生相应 Token 用量）：
-
-```bash
-docker compose --env-file .env run --rm --no-deps agent \
-  python -m erpnext_agent.model_smoke
-```
-
-页面与受保护 SSE 的联合检查（会创建并自动删除临时 Session，也会实际请求模型）：
-
-```bash
-docker compose --env-file .env exec -T agent \
-  python -m erpnext_agent.ui_smoke
-```
-
-数据库持久化与真实模型记忆检查（两次模型请求会产生 Token 用量；测试会保留聊天记录作为
-验证证据，但会删除临时 Redis Session）：
-
-```bash
-docker compose --env-file .env exec -T agent \
-  python -m erpnext_agent.memory_smoke
-```
-
-## 安全边界
-
-项目不接收 ERPNext 用户密码，不提供共享 Administrator/API Key，不开放 submit、cancel、
-delete、过账或任意 SQL。Data/Patrol/Orchestrator 在代码层没有写工具；所有 ERPNext 业务文本
-都标记为 `untrusted_business_data`。MCP 权限拒绝不会触发高权限身份或 SQL fallback。
+[MIT](LICENSE)
